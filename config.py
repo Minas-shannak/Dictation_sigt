@@ -5,6 +5,9 @@ they can change without editing code.
 """
 
 import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
 
 # --- Speech recognition (faster-whisper) -------------------------------------
 # The Whisper model: large-v3, chosen on real clips for word accuracy (see
@@ -123,6 +126,16 @@ SENTENCE_SPLIT_BEFORE_WORDS = {"and", "but", "because", "so", "or", "when", "whi
 # Abbreviations that don't end a sentence (titles never do; the rest only before a lowercase word).
 TITLE_ABBREVIATIONS = {"mr.", "mrs.", "ms.", "dr.", "prof."}
 ABBREVIATIONS = {"st.", "jr.", "sr.", "vs.", "etc.", "e.g.", "i.e.", "a.m.", "p.m.", "u.s.", "u.k.", "approx."}
+
+# --- Transcript cache (services/transcript_cache.py) ------------------------
+# Layer 1: raw recognition results (costly to rebuild: retranscribing).
+# Layer 2: processed transcripts in the unified format (cheap: rebuilt from layer 1).
+# Both live in subfolders of cache/, so the old caption files in cache/<id>.json are
+# never read as transcripts (they stay untouched until the Phase 7 migration).
+CACHE_DIR = BASE_DIR / "cache"
+ASR_CACHE_DIR = CACHE_DIR / "asr"
+TRANSCRIPT_CACHE_DIR = CACHE_DIR / "transcripts"
+CACHE_FORMAT = 1  # bump if the cache entry layout changes; older entries are then ignored
 
 # --- Audio extraction (FFmpeg) -----------------------------------------------
 FFPROBE_TIMEOUT_SECONDS = 30

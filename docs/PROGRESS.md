@@ -10,7 +10,7 @@ Update this file at the end of every phase. Commit after every phase.
 | 1. Inspect the project | Done, approved. Decisions recorded in PLAN.md section 0.1 |
 | 2. Audio extraction and AI transcription | Done, approved |
 | 3. Transcript processing | Done, approved; follow-ups done. Model decided: large-v3 + prompt, VAD off |
-| 4. Unified format and caching | Not started |
+| 4. Unified format and caching | Done, **waiting for review** |
 | 5. Background jobs and local upload | Not started |
 | 6. Replace the YouTube caption pipeline | Not started |
 | 7. Integrate with the dictation engine | Not started |
@@ -542,3 +542,55 @@ All runs: matched-word timing agrees with the references (0–5 words off per ru
 ### Tests run
 - pytest: **137 passed** (before Phase 4).
 - GPU runs: 5 main fixtures + 4 hotwords experiments (cuda/float16). CPU run: 1 (cpu/int8).
+
+## Phase 4: Unified format and caching (Oct 31, 2026)
+
+### Done
+- **`services/transcript_cache.py`**, `get_transcript(source, extract_audio, language, processing_settings, on_progress, on_stage)` returns the unified transcript.
+  - **Inputs:** `extract_audio` is a callable returning a context manager that yields a temporary audio path (such as `extracted_audio` bound to a file). It is only called on a layer-1 miss.
+  - **Stages reported:** `extracting_audio`, `loading_model`, `transcribing` (the last two from the transcriber), `processing`, `preparing`.
+  - **Sources:** `Source(source_type, source_ref, original_filename)` gives `video_id` `yt:<id>` or `local:<sha256>`.
+    - `youtube_source(id)`
+    - `local_source(path, original_filename)`, which hashes the content in 1 MiB chunks, so the same bytes under another name give the same ID
+  - **Layer 1** (`cache/asr/<video>__<key>.json`): the raw result.
+    - **Key:** sha256 of `{video_id, model, asr_settings}`, where `asr_settings` comes from the new `ai.transcriber.asr_settings(language)` and holds language, vad_filter, vad_threshold, condition_on_previous_text, beam_size, word_timestamps and initial_prompt. The transcriber records the same function's output in every raw result, so the key and the record can't drift apart.
+    - **Not in the key:** device/compute type. The GPU and CPU runs are the same model, and the CPU run measured equal accuracy.
+  - **Layer 2** (`cache/transcripts/<video>__<key>.json`): the unified transcript. **Key:** sha256 of `{layer-1 key, resolved processing settings, PROCESSING_VERSION}`.
+  - **Entries:** every entry carries `cache_format`, `kind` and `key`. Anything else (unreadable, wrong kind/format/key) is ignored as a miss and overwritten, with a log warning.
+  - **Atomic writes:** temp file in the same folder, fsync, `os.replace`; the temp file is removed on any exception, including KeyboardInterrupt.
+  - **Validation before caching:**
+    - the raw result must have words with finite timestamps, 0 ≤ start ≤ end ≤ duration + 1 s, and starts in order (tolerance 0.05 s)
+    - otherwise `invalid_result`, or `no_speech` when there are no words, and nothing is cached
+  - **No sentences** (all segments hallucinated, or nothing left): `TranscriptError` with a friendly message. The raw result **stays in layer 1 for review**, so the same verdict comes back without retranscribing; nothing is written to layer 2.
+  - **Old caption files** (`cache/<id>.json`) are never read: different folder, and no `cache_format` / `kind` / `key`. They are left untouched for the current app and for the Phase 7 migration.
+- **Unified format** (PLAN section 11): `video_id`, `source_type`, `source_ref`, `original_filename`, `duration`, `language`, `language_probability`, `model`, `device`, `compute_type`, `asr_settings`, `processing_settings`, `processing_version`, `transcript_version` (12 hex chars of sha256 over the sentence texts), `created_at` (UTC), `original_transcript`, `training_transcript`, `excluded_segments`, `excluded` (details for review), and `sentences` `[{index, text, start, end, words}]`. The raw result is not duplicated inside it.
+- **Refactor:** `ai.transcript_processor.resolve_settings()`, used by both the processor and the layer-2 key.
+- **`config.py`:** `BASE_DIR`, `CACHE_DIR`, `ASR_CACHE_DIR`, `TRANSCRIPT_CACHE_DIR`, `CACHE_FORMAT = 1`.
+
+### Files changed
+- New: `services/transcript_cache.py`, `tests/test_transcript_cache.py`.
+- Changed: `config.py`, `README.md`, `docs/PROGRESS.md`.
+- In the previous commit, but made for Phase 4 (behavior-neutral refactors): `ai/transcriber.py` (`asr_settings()`) and `ai/transcript_processor.py` (`resolve_settings()`).
+- `app.py` and the frontend are unchanged: the running app still uses captions until Phase 6.
+
+### Tests run (real results)
+- **pytest: 160 passed** (137 + 23 new cache tests, fake transcriber, temporary cache folders):
+  - **Format:** the section 11 fields; the raw stored separately; `transcript_version` stable and changing with the text; prefixed IDs; local content hashing (a renamed copy gets the same ID).
+  - **Second load:** no transcription and no audio extraction.
+  - **Processing changes:** `remove_fillers` reuses layer 1, and the version changes because the clip has two real "um". A new PROCESSING_VERSION reprocesses without transcribing.
+  - **Recognition changes:** a different model, prompt, VAD or beam size retranscribes, and both entries are kept. The language is part of the key. Different sources never share entries.
+  - **Old caption file:** never read and left untouched.
+  - **Bad entries:** corrupted or foreign entries are treated as misses and rewritten.
+  - **Failures:** empty and broken-timestamp results raise errors and nothing is cached. All-hallucinated keeps the raw result, adds no transcript, and the second try doesn't retranscribe. A failed transcription writes nothing.
+  - **Atomic write:** an interrupted write leaves the old file intact and no temp file.
+  - **Stages:** reported on a miss; only `processing` on a hit.
+- **End to end on the GPU** (real audio, temporary cache folder, conversation clip as a local file):
+  - first load: 18.2 s, large-v3 cuda, 73 sentences, all 5 stages
+  - same again: 0.00 s, no transcription
+  - `remove_fillers=False`: 0.01 s, no transcription, new `transcript_version`
+  - a renamed copy of the file: same `video_id`
+- **Not tested here:** the frontend side of `transcript_version` (progress tied to it, a reset on mismatch). Progress lives in browser localStorage, which is Phase 7. A Python helper would be untestable against the real storage, so that test belongs with the frontend work.
+
+### Not done / next
+- **Phase 5:** jobs, status and cancellation; uploads (2 GB limit, secure names, ffprobe validation, codec check and Convert); the HTML5 player behind the shared interface; 30-day upload retention. `get_transcript` is ready to be called from the job worker. **Cancellation inside FFmpeg or Whisper is not implemented yet.** A cancelled job must not write cache entries, and since writes only happen after a step completes, cancelling between steps already satisfies that. Phase 5 adds the checks.
+- `app.py` still serves the old caption pipeline (replaced in Phase 6).

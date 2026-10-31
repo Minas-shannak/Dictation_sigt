@@ -78,9 +78,12 @@ Run the tests with `pytest`.
 - `tests/reference/`: YouTube captions for the test clips, used only as a test reference (the app never reads captions);
   `python tests/tools/evaluate_fixtures.py` compares every fixture against them
 - `services/audio_extractor.py`: checks media with ffprobe and extracts 16 kHz mono audio with FFmpeg
+- `services/transcript_cache.py`: builds the unified transcript for a video and caches it in two layers
 - `tests/`: pytest tests (run `pytest`)
 - `docs/`: the plan for the audio-based pipeline and the progress log
-- `cache/`: fetched captions, one JSON file per video
+- `cache/`: `asr/` holds raw speech recognition results (rebuilt only when the model or recognition settings
+  change), `transcripts/` the processed transcripts (rebuilt from `asr/` when processing changes, without
+  transcribing again). The `<videoId>.json` files directly in `cache/` are the old caption cache.
 
 After editing `style.css` or `app.js`, bump the version in its link in `index.html`
 (`style.css?v=1` → `?v=2`, `app.js?v=1` → `?v=2`) so Chrome doesn't keep using a cached old copy.
