@@ -706,3 +706,68 @@ pytest: 162 passed.
   - saved progress not yet tied to `transcript_version`
   - the old-data migration
 - **Phase 6:** YouTube still uses captions. The Deno/yt-dlp audio service and removing captions are next.
+
+## Final model (large-v3-turbo) and per-sentence clarity (Nov 1, 2026)
+
+### Model: large-v3-turbo + prompt, VAD off
+- **Settings:** `WHISPER_MODEL = "large-v3-turbo"`, on GPU float16 and in the CPU fallback (int8, same model). `INITIAL_PROMPT` kept.
+- **Docs updated:** PLAN.md 0.1 item 10, 6A, 6C and the section 11 example; README.
+- **Fixtures:** main fixtures re-transcribed with the defaults (cuda/float16, 2.2–2.3 GB VRAM, 0.6–4.6 s each). The large-v3 + prompt ones moved to `experiments/*_large-v3_prompt.json`.
+
+**Evaluation (VAD off; movie reference = auto-captions + the human-verified lines)**, from `python tests/tools/evaluate_fixtures.py`:
+
+| Run | Conversation WER (manual ref.) | Movie WER (auto + verified) | Numbers WER (auto) | Time per clip | VRAM |
+| --- | --- | --- | --- | --- | --- |
+| small | 5.4% | **11.2%** | 5.4% | 3.5–3.7 s | 0.8–1.0 GB |
+| small + prompt | 7.9% | 15.6% | 5.5% | 3.6–5.5 s | 0.8–1.0 GB |
+| large-v3 | 4.1% | 17.8% (D33) | 4.0% | 8–11.5 s | 4.1 GB |
+| large-v3 + prompt | **3.8%** | 16.7% (D31) | 4.0% | 8–12 s | 4.1 GB |
+| large-v3-turbo | 4.9% | 11.5% | **3.9%** | 4.3–4.7 s | 2.3 GB |
+| **large-v3-turbo + prompt (default)** | 4.6% | 12.3% (D16) | **3.9%** | 4.3–4.6 s | 2.3 GB |
+
+Default, details:
+- **Conversation:** 13 sentence ends, 6 commas, 25 lowercase "i" (fixed by processing), 70 sentences.
+- **Movie:** 55 ends, 55 sentences.
+- **Numbers:** 44 ends, 69 sentences. Every number is read as words, with no digits left.
+
+Real exclusions (default):
+- **Song:** "Let's talk about it." (prompt leak) and the closing "Thank you." (isolated stock phrase).
+- **Silence:** "Thank you."
+- **Movie, conversation, numbers:** none.
+- **Movie listening check:** turbo writes nothing in the verified music-only span. All 4 verified sentences are present (the first as "Oh, Jack, you guys have fun all the time.", which merges "Come on, Jack" heard as "Oh, Jack").
+
+**Fix: repeated single-word segments.**
+- **Problem:** turbo heard "Jack?" four times as four one-word segments, and the cross-segment "repeated segment" rule flagged the fourth with the phrase limit (3). Within one segment a single word is allowed 6 repeats, so the two rules disagreed.
+- **Fix:** one-word segments now use the single-word limit (6). Calling a name repeatedly is speech, not a loop. Tested: 4 kept, 8 flags the 7th and 8th, and phrases still use 3.
+
+### Clarity (layer 2, no retranscription)
+- **What each sentence now carries:** `clarity` (mean word probability, 3 decimals) and `unclear` (clarity < `SENTENCE_CLARITY_MIN`, starting value **0.7**, configurable and part of the processing settings, so it is in the layer-2 key).
+- Nothing is deleted. The badge and the stats rule come in Phase 7. `PROCESSING_VERSION = 5`.
+- **Movie sentence clarities (turbo + prompt):** most clean dialogue is 0.89–1.00. The low ones:
+  - "Dad!" 0.44
+  - "Jack? Jack? Jack?" 0.64 (verified real speech, shouted over the score)
+  - "I'll make that five," 0.67
+  - "Baby tooth." 0.68
+  - "It was me." 0.73
+  - "You alright?" 0.76
+  - "Oh, Jack, you guys have fun all the time." 0.77 (verified; includes the misheard "Oh")
+  - "We're not trick you." 0.79 (misheard "Would I trick you?")
+
+Sentences marked unclear at each threshold:
+
+| Threshold | movie (56) | conversation (70) | numbers (69) | song (22) |
+| --- | --- | --- | --- | --- |
+| 0.5 / 0.6 | 1 ("Dad!") | 0 | 0 | 2 |
+| 0.65 | 2 (+ "Jack? Jack? Jack?") | 0 | 0 | 2 |
+| **0.7** | 4 (+ "I'll make that five,", "Baby tooth.") | 1 ("And in like PE," 0.66) | 0 | 2 |
+| 0.75 | 5 (+ "It was me.") | 1 | 1 | 3 |
+| 0.8 | 8 (+ "You alright?", "Oh, Jack, you guys…", "We're not trick you.") | 1 | 3 | 3 |
+
+- **Why 0.7:** at 0.7 the badge marks exactly the shouted or music-covered lines in the movie, and almost nothing in clean speech. At 0.8 it would also mark misheard lines ("We're not trick you."), which arguably deserve the badge too. **Your call.**
+
+### Tests
+- **pytest: 197 passed.** Changes:
+  - real-clip expectations updated to the turbo fixtures (exclusions, fillers: movie "uh", conversation and numbers two "um" each, numbers with no digits left)
+  - the listening-check test now requires that anything written in the music-only span is excluded (turbo writes nothing there)
+  - new clarity test and single-word repeat test
+  - the cache test's "other model" is now large-v3

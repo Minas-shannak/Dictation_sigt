@@ -49,8 +49,8 @@ python -m ai.cli some-video.mp4 --words     # --language auto, --twice
 python -m ai.cli tests/fixtures/numbers.json  # reprocess a saved raw result, no transcription
 ```
 
-The app uses one Whisper model, `large-v3`, with a short punctuated prompt (`config.py`). It is
-downloaded once (about 3 GB) on first use into `~/.cache/huggingface` and needs about 4 GB of GPU
+The app uses one Whisper model, `large-v3-turbo`, with a short punctuated prompt (`config.py`). It is
+downloaded once (about 1.6 GB) on first use into `~/.cache/huggingface` and needs about 2.3 GB of GPU
 memory. Without a working GPU the same model runs on the CPU, which is much slower.
 
 ## Run

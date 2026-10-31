@@ -414,14 +414,13 @@ def real(request):
     return request.param, raw, result
 
 
-# What the filter excludes on the real clips (large-v3 + prompt, VAD off). Speech clips: nothing.
-# Song: the prompt leaking over music ("Let's talk about it.", no_speech_prob 0.98) and a closing
-# "Thank you." after 7.6 s of music. Movie: "Oh, my God." at 147 s, verified by a listening check
-# as music only (tests/reference/movie.json, human_verified).
+# What the filter excludes on the real clips (large-v3-turbo + prompt, VAD off). Speech clips and
+# the movie: nothing (turbo writes nothing in the movie's verified music-only span; its four
+# "Jack?" are a name being called, within the single-word repeat limit). Song: the prompt leaking
+# over music ("Let's talk about it.") and a closing "Thank you." after several seconds of music.
 EXPECTED_EXCLUSIONS = {
-    "conversation": [], "numbers": [],
+    "conversation": [], "numbers": [], "movie": [],
     "music": ["Let's talk about it.", "Thank you."],
-    "movie": ["Oh, my God."],
 }
 
 
@@ -467,9 +466,9 @@ def test_real_numbers_clip_reads_times_as_words():
     r = process_transcript(raw)
     text = r["training_transcript"]
     assert "ten thirty" in text and "twelve thirty" in text and "forty-five minutes" in text
-    assert "one p.m two p.m three p.m" in text and "eleven o'clock" in text
+    assert "one p.m" in text and "two p.m" in text and "eleven o'clock" in text
     assert "one thousand" not in text
-    assert re.findall(r"\S*\d\S*", text) == ["3-0,"]  # "three zero", ambiguous: left as written
+    assert re.findall(r"\S*\d\S*", text) == []  # every number read as words
 
 
 def _fixture_raw(name):
@@ -477,8 +476,9 @@ def _fixture_raw(name):
 
 
 @pytest.mark.parametrize("name, fillers", [
-    ("movie", [("uh,", 125.4)]),
-    ("conversation", [("um", 43.62), ("um", 116.8)]),
+    ("movie", [("uh", 125.4)]),
+    ("conversation", [("um", 43.8), ("um", 116.9)]),
+    ("numbers", [("um", 32.2), ("um", 34.1)]),
     ("experiments/movie_small", [("Uh,", 100.16), ("uh,", 125.62)]),
     ("experiments/conversation_turbo", [("um", 43.8), ("um", 116.9)]),
 ])
@@ -538,6 +538,31 @@ def test_movie_filter_agrees_with_the_listening_check(name):
     for e in r["excluded"]:
         for v in verified["speech"]:
             assert not (e["start"] < v["end"] and e["end"] > v["start"]), f"real speech {v['text']!r} excluded: {e['text']!r}"
+    raw = _fixture_raw(name)
     for quiet in verified["no_speech"]:
         assert not [st["text"] for st in r["sentences"] if st["start"] < quiet["end"] and st["end"] > quiet["start"]]
-        assert any(quiet["start"] <= e["start"] < quiet["end"] for e in r["excluded"])  # what Whisper wrote there was caught
+        # Whatever Whisper wrote there (if anything) was excluded.
+        written = [i for i, sg in enumerate(raw["segments"]) if sg["start"] < quiet["end"] and sg["end"] > quiet["start"]
+                   and any(quiet["start"] <= w["start"] < quiet["end"] for w in sg["words"])]
+        assert {e["segment"] for e in r["excluded"]} >= set(written)
+
+
+def test_sentence_clarity_is_the_mean_word_probability_and_marks_unclear_ones():
+    clear = [(" Don't", 0.0, 0.3, 0.99), (" look", 0.3, 0.6, 0.98), (" down.", 0.6, 0.9, 0.97)]
+    shouted = [(" Jack?", 3.0, 3.4, 0.47), (" Jack?", 3.6, 4.0, 0.81)]
+    r = process_transcript(raw_of(seg(clear + shouted)))
+    a, b = r["sentences"]
+    assert (a["clarity"], a["unclear"]) == (0.98, False)
+    assert (b["clarity"], b["unclear"]) == (0.64, True)
+    assert [s["text"] for s in r["sentences"]] == ["Don't look down.", "Jack? Jack?"]  # kept, just marked
+    r = process_transcript(raw_of(seg(clear + shouted)), {"sentence_clarity_min": 0.6})
+    assert r["sentences"][1]["unclear"] is False
+
+
+def test_repeated_single_word_segments_get_the_single_word_limit():
+    calls = [seg(timed("Jack?", i * 1.5)) for i in range(4)]       # a name called four times
+    assert find_hallucinations(calls, default_settings()) == {}
+    loop = [seg(timed("Jack?", i * 1.5)) for i in range(8)]        # more than 6: a decoding loop
+    assert sorted(find_hallucinations(loop, default_settings())) == [6, 7]
+    phrases = [seg(timed("I love you.", i * 2.0)) for i in range(5)]
+    assert sorted(find_hallucinations(phrases, default_settings())) == [3, 4]

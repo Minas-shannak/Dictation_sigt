@@ -36,6 +36,7 @@ SETTING_NAMES = [
     "SENTENCE_MAX_WORDS", "SENTENCE_MAX_SECONDS", "SENTENCE_MIN_WORDS", "STANDALONE_EXPRESSIONS",
     "SINGLE_WORD_MERGE_SECONDS", "SENTENCE_PAUSE_SECONDS",
     "SENTENCE_LONG_SILENCE_SECONDS", "SENTENCE_SPLIT_PAUSE_SECONDS", "SENTENCE_SPLIT_BEFORE_WORDS",
+    "SENTENCE_CLARITY_MIN",
     "TITLE_ABBREVIATIONS", "ABBREVIATIONS",
 ]
 
@@ -143,10 +144,12 @@ def find_hallucinations(segments: List[Dict], s: Dict, prompt: str = "") -> Dict
         if (text in isolated and min(gap_before, gap_after) >= s["isolated_hallucination_gap_seconds"]
                 and words and sum(w["probability"] for w in words) / len(words) < s["isolated_hallucination_max_word_prob"]):
             reasons.append("isolated_stock_phrase")
-        # The same segment text over and over is a decoding loop across segments.
+        # The same segment text over and over is a decoding loop across segments. A single
+        # word gets the single-word limit, as within a segment ("Jack? Jack? Jack? Jack?").
         run = run + 1 if text and text == prev_text else 1
         prev_text = text
-        if run > s["hallucination_max_phrase_repeats"]:
+        limit = s["hallucination_max_word_repeats"] if len(text.split()) == 1 else s["hallucination_max_phrase_repeats"]
+        if run > limit:
             reasons.append("repeated_segment")
         if reasons:
             flagged[i] = reasons
@@ -486,11 +489,16 @@ def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
     for p in pieces:
         if not any(re.search(r"\w", w["word"]) for w in p):
             continue  # punctuation only: nothing to type
+        # Clarity: the mean word probability. Low values mark speech that is hard to hear
+        # (shouted over music, mumbled); such sentences stay, flagged "unclear".
+        clarity = round(sum(w["probability"] for w in p) / len(p), 3)
         sentences.append({
             "index": len(sentences),
             "text": " ".join(w["word"] for w in p),
             "start": p[0]["start"],
             "end": p[-1]["end"],
+            "clarity": clarity,
+            "unclear": clarity < s["sentence_clarity_min"],
             "words": [{k: w[k] for k in ("word", "start", "end", "probability", "source")} for w in p],
         })
 

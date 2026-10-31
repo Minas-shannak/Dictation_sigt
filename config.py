@@ -10,11 +10,12 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 # --- Speech recognition (faster-whisper) -------------------------------------
-# The Whisper model: large-v3, chosen on real clips for word accuracy (see
-# docs/PROGRESS.md, experiment C). It is downloaded once (about 3 GB) on first use
-# into the Hugging Face cache, and is the only model the app uses: the CPU
-# fallback runs the same model, just slower.
-WHISPER_MODEL = os.environ.get("DICTATION_WHISPER_MODEL", "large-v3")
+# The Whisper model: large-v3-turbo. Chosen on real clips (docs/PROGRESS.md): close
+# to large-v3 on clean speech, and unlike large-v3 it keeps dialogue spoken over a
+# movie score (human-verified reference). Downloaded once (about 1.6 GB) on first use
+# into the Hugging Face cache; it is the only model the app uses: the CPU fallback
+# runs the same model (int8), just slower.
+WHISPER_MODEL = os.environ.get("DICTATION_WHISPER_MODEL", "large-v3-turbo")
 # "auto" uses the NVIDIA GPU when CUDA is available and falls back to the CPU
 # (same model, int8; much slower); "cpu" never touches CUDA.
 DEVICE_PREFERENCE = os.environ.get("DICTATION_DEVICE", "auto")
@@ -40,7 +41,7 @@ INITIAL_PROMPT = "Hi, how are you? I'm fine, thanks. Well, let's talk about it. 
 
 # --- Transcript processing (ai/transcript_processor.py) ----------------------
 # Bump whenever processing logic changes in a way that changes the sentences.
-PROCESSING_VERSION = 4
+PROCESSING_VERSION = 5
 
 # Hallucination filter. A segment is excluded from the training transcript (but
 # kept in the raw result) if any rule matches. The defaults for the first two
@@ -120,6 +121,11 @@ SENTENCE_LONG_SILENCE_SECONDS = 2.0
 # middle, the longest real pause (at least this long), before one of these words,
 # and only then the longest gap. In fluent speech Whisper's word gaps are mostly 0,
 # so without the word list the split falls mid-phrase.
+# Per-sentence clarity = mean word probability. Below this a sentence is marked "unclear"
+# (a badge in the UI; skipping it doesn't count in the stats). It is never deleted.
+# Starting value from the real clips: clean speech is almost all above 0.7 (conversation:
+# 1 of 70 below, numbers: 0 of 69); the movie's shouted or music-covered lines fall below.
+SENTENCE_CLARITY_MIN = 0.7
 SENTENCE_SPLIT_PAUSE_SECONDS = 0.3
 SENTENCE_SPLIT_BEFORE_WORDS = {"and", "but", "because", "so", "or", "when", "which", "then", "while",
                                "although", "though", "whereas", "if", "until", "unless", "before", "after"}
