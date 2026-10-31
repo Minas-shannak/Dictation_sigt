@@ -11,7 +11,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_file, send_from_directory
 
 import config
 from ai.transcriber import current_device
@@ -28,6 +28,19 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES  # larger uploads are refused before saving
 
 jobs = JobManager()
+
+
+@app.before_request
+def _canonical_host():
+    """Send http://localhost:<port>/... to http://127.0.0.1:<port>/... (same path and query).
+
+    Browsers keep saved progress per address, so using both would split it. 307 keeps the
+    method and body. A host without a port (Flask's test client) is left alone.
+    """
+    host, _, port = request.host.partition(":")
+    if host.lower() == "localhost" and port:
+        query = request.query_string.decode("latin-1")
+        return redirect(f"http://{config.CANONICAL_HOST}:{port}{request.path}" + (f"?{query}" if query else ""), code=307)
 
 
 @app.get("/")
@@ -244,4 +257,6 @@ if __name__ == "__main__":
     uploads.cleanup(startup=True)
     remove_stale_temp_files()
     threading.Thread(target=_retention_loop, name="upload-retention", daemon=True).start()
-    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
+    logging.getLogger(__name__).info("Open http://%s:%d in your browser (localhost:%d redirects there)",
+                                     config.CANONICAL_HOST, PORT, PORT)
+    app.run(host=config.CANONICAL_HOST, port=PORT, debug=False, threaded=True)

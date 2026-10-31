@@ -59,8 +59,11 @@ memory. Without a working GPU the same model runs on the CPU, which is much slow
 python app.py
 ```
 
-Open http://localhost:8000 in Chrome, paste a YouTube link and press **Load**, or press
+Open **http://127.0.0.1:8000** in your browser (Firefox or Chrome), paste a YouTube link and press **Load**, or press
 **Upload a video…** to practise with a video file of your own (MP4, MOV or WebM, up to 2 GB).
+
+Always use that address. Browsers keep saved progress separately for each address, so
+http://localhost:8000 redirects to http://127.0.0.1:8000 to keep everything in one place.
 
 Run the tests with `pytest` (install the dev requirements first:
 `uv pip install --python .venv/bin/python -r requirements-dev.txt`).
@@ -154,7 +157,8 @@ To go back to the caption-based version with your old data:
    which also checks the checksums).
 2. Switch to the caption-based version: `git switch --detach cd42f31`, install its requirements
    (`uv pip install --python .venv/bin/python -r requirements-dev.txt` covers them) and run `python app.py`.
-3. Open http://localhost:8000, press F12, open the Console, and paste (with your backup file's
+3. Open http://127.0.0.1:8000 (the caption-based version has no redirect, so use exactly this address),
+   press F12, open the Console, and paste (with your backup file's
    contents in place of `BACKUP`):
 
    ```js

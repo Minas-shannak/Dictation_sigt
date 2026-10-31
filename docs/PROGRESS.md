@@ -1036,3 +1036,34 @@ Sentences marked unclear at each threshold:
   - frontend: `static/app.js`, `static/style.css`, `index.html` (`app.js?v=7`, `style.css?v=4`)
   - tests: `tests/test_youtube_audio.py`
   - docs: `README.md`, `docs/PLAN.md`, `docs/PROGRESS.md`
+
+## One address: localhost:8000 redirects to 127.0.0.1:8000 (Nov 1, 2026)
+
+### The localhost:8000 backup (checked before adding the redirect)
+- **Not written by the page.** `backup/` held only the `127.0.0.1:8000` browser backup (01:12:14). The only downloaded copy, `~/Downloads/dictation-old-progress-backup.json` (01:12:14), is that same backup.
+- **Firefox's storage for `localhost:8000` was unchanged since Oct 31 02:50** (fresh read-only copy). It still held the old records, so the page's migration had not run there. Most likely the app wasn't running when that address was opened, or the backup request failed. Either way the safe default held: nothing was cleared without a backup.
+- **Why it matters now:** once localhost redirects, the app can never run on that address again, so I wrote the backup myself. `backup/pre-audio-pipeline-20261101-011207/localStorage-localhost-8000-20261101-014802.json` is decoded from the read-only copy, in the same format as the page's backups, and is identical to the export. It contains:
+  - "Frozen – Meeting Olaf Clip (HD)": 33/33, stats for 32 sentences, 97 missed words
+  - "Rise of the Guardians" clip: 103/103, stats for 103 sentences, 106 missed words
+  - sound settings
+- **The stale data** stays in Firefox under `localhost:8000`, unused. It can be removed in Firefox: Settings → Privacy & Security → Cookies and Site Data → Manage Data… → localhost.
+
+### Redirect
+- **`app.py` `before_request`:** a request whose Host is `localhost:<port>` gets **307** to `http://127.0.0.1:<port><path>?<query>`.
+  - Path and query are kept, and 307 keeps the method and body.
+  - A host without a port (Flask's test client) is not redirected.
+  - `config.CANONICAL_HOST = "127.0.0.1"`; the server binds to it.
+- **Startup log** shows only the canonical address: "Open http://127.0.0.1:8000 in your browser (localhost:8000 redirects there)". Flask's own banner line is already hidden by the werkzeug log level.
+- **README:** it uses http://127.0.0.1:8000, with one sentence explaining the redirect. The restore steps use the exact address, since the caption-based version has no redirect.
+
+### Tests run (real results)
+- **pytest: 238 passed.** New `tests/test_canonical_host.py` (7):
+  - path + query kept (4 cases, including an encoded query and a `local:` media path)
+  - POST redirected with 307 on another port, case-insensitive host
+  - 127.0.0.1 served directly
+  - the test client's portless host not redirected
+- **Real start of `python app.py`:**
+  - log line as above
+  - `curl localhost:8000/?a=1` gave 307 → `http://127.0.0.1:8000/?a=1`, and `127.0.0.1:8000` gave 200
+  - headless Firefox opening `http://localhost:8000/static/style.css?v=4` ended at `http://127.0.0.1:8000/static/style.css?v=4`, and opening `/` ended at `http://127.0.0.1:8000/` with the app loaded
+- **Real data after that start:** unchanged. The migration marker still records the 01:12 run; `cache/` has `asr/` and `transcripts/` only; the backup folder holds both browser backups.

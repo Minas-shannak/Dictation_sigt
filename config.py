@@ -9,6 +9,10 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
+# The one address the app is used at. Browsers keep saved progress separately per address,
+# so http://localhost:<port> is redirected here to keep everything in one place.
+CANONICAL_HOST = "127.0.0.1"
+
 # --- Speech recognition (faster-whisper) -------------------------------------
 # The Whisper model: large-v3-turbo. Chosen on real clips (docs/PROGRESS.md): close
 # to large-v3 on clean speech, and unlike large-v3 it keeps dialogue spoken over a
