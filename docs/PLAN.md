@@ -14,6 +14,18 @@ This plan is executed in phases across several sessions, not in one pass.
 - If an architectural decision is unclear or potentially destructive, explain the trade-off and ask before acting.
 - Items marked **\[**Decided\] are my final decisions. Follow them, and ask before deviating.
 
+## 0.1 Decisions After Phase 1 (Oct 31, 2026)
+
+Answers to the Phase 1 open questions. These are **\[Decided\]** items.
+
+1. **Python:** the project venv uses Python 3.12, created with `uv`. Do not use 3.14. Network access for pip is allowed.
+2. **GPU libraries:** CUDA libraries (cuBLAS, cuDNN) are installed as pip packages inside the venv only, together with faster-whisper, yt-dlp and num2words. Use versions that support Blackwell (CUDA 12.8 or newer) and match the installed ctranslate2. Pin the working versions in `requirements.txt`. The GPU counts as working only after a real transcription runs on it and `nvidia-smi` shows the process.
+3. **Padding:** `pad_before` 0.1 s and `pad_after` 0.25 s with clamping, replacing the old 0.2 s / 0.15 s. Keep them configurable; tune after real tests.
+4. **Clean start:** back up first, then clear per-video progress, statistics (WPM/accuracy history, missed words), recent videos and the old cache. Keep sound and theme settings. Reset the timing offset to 0.
+5. **Language box:** kept and passed to Whisper. Prefilled with "en"; empty means auto-detect. The language is part of the layer-1 cache key.
+6. **Upload limit:** 2 GB.
+7. **Git identity:** keep the configured git email as it is.
+
 ## 1. Main Objective
 
 I have an existing personal web application built with Flask, HTML, CSS and JavaScript. It is used for practicing English listening and typing with YouTube videos. It currently retrieves captions with `youtube-transcript-api`, splits them into sentence-sized segments, and uses them for dictation exercises.

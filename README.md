@@ -4,14 +4,36 @@ Practice dictation with YouTube videos: paste a link, hear one sentence at a tim
 
 ## Setup
 
-Requires Python 3.10+.
+Uses Python 3.12 in a venv made with [uv](https://docs.astral.sh/uv/), and FFmpeg from the system.
 
 ```bash
+sudo apt install ffmpeg            # provides ffmpeg and ffprobe
 cd typing-app
-python3.10 -m venv .venv
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-pip install -r requirements.txt
 ```
+
+### GPU (optional, NVIDIA)
+
+Speech recognition runs on the NVIDIA GPU when it can, and on the CPU otherwise. No system
+CUDA toolkit is needed: only the NVIDIA driver (check with `nvidia-smi`) plus the cuBLAS pip
+package in `requirements.txt`, which `ai/transcriber.py` loads from the venv. RTX 50xx
+(Blackwell) cards need CUDA 12.8+ builds; the pinned `ctranslate2` has them. The very first
+transcription on a new GPU takes about 20 s longer while CUDA compiles and caches its kernels.
+
+If the GPU can't be used, the log says why and how to fix it (for example a missing
+`libcublas`), and transcription continues on the CPU. The device in use is logged with every
+transcription. To force the CPU, run with `DICTATION_DEVICE=cpu`.
+
+### Transcribing a file from the command line
+
+```bash
+python -m ai.cli some-video.mp4 --words     # --language auto, --model base, --twice
+```
+
+The Whisper model (`small` by default, set with `DICTATION_WHISPER_MODEL`) is downloaded
+once, on first use, into `~/.cache/huggingface`.
 
 ## Run
 
@@ -30,7 +52,11 @@ Run the tests with `pytest`.
 - `static/style.css`: all styles, including the light and dark themes
 - `static/app.js`: all frontend code (player, typing, sounds, stats, saved progress)
 - `static/sounds/`: typing sounds (`key.mp3`, `error.mp3`, `hint.wav`)
-- `test_segment.py`: tests for caption cleanup and segmentation
+- `config.py`: settings for speech recognition and audio extraction, with defaults
+- `ai/transcriber.py`: faster-whisper speech recognition (GPU with CPU fallback); `ai/cli.py` runs it from the command line
+- `services/audio_extractor.py`: checks media with ffprobe and extracts 16 kHz mono audio with FFmpeg
+- `tests/`: pytest tests (run `pytest`)
+- `docs/`: the plan for the audio-based pipeline and the progress log
 - `cache/`: fetched captions, one JSON file per video
 
 After editing `style.css` or `app.js`, bump the version in its link in `index.html`
