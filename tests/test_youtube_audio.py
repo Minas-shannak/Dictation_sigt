@@ -83,10 +83,13 @@ class FakeYDL:
         return dict(FakeYDL.info)
 
     def process_ie_result(self, info, download=True):
+        if FakeYDL.behaviour == "stall":  # YouTube holding the connection: no progress at all
+            time.sleep(5)
         path = self.opts["outtmpl"].replace("%(ext)s", "webm")
         with open(path + ".part", "wb") as f:
             for i in range(1, 11):
                 f.write(b"x" * 1000)
+                time.sleep(0.03)
                 for hook in self.opts["progress_hooks"]:
                     hook({"status": "downloading", "downloaded_bytes": i * 1000, "total_bytes": 10_000})
         os.replace(path + ".part", path)
@@ -123,7 +126,7 @@ def test_cancelled_download_removes_the_temp_folder(fake_ydl):
 
     def check():
         calls.append(1)
-        if len(calls) == 3:
+        if len(calls) == 2:
             raise Stop()
     folders_before = set(os.listdir(os.environ.get("TMPDIR", "/tmp")))
     with pytest.raises(Stop):
@@ -208,3 +211,17 @@ def test_app_code_never_imports_the_caption_library():
     for path in [root / "app.py", root / "config.py", *(root / "ai").glob("*.py"), *(root / "services").glob("*.py")]:
         text = path.read_text(encoding="utf-8")
         assert "youtube_transcript_api" not in text and "YouTubeTranscriptApi" not in text, path
+
+
+def test_cancel_is_quick_even_when_youtube_sends_nothing(fake_ydl):
+    # Real case: YouTube held the connection 14 s without data, so yt-dlp's hook never ran.
+    fake_ydl.behaviour = "stall"
+    t0 = time.monotonic()
+
+    def check():
+        if time.monotonic() - t0 > 0.3:
+            raise Stop()
+    with pytest.raises(Stop):
+        with downloaded_audio("jNQXAC9IVRw", check=check):
+            pass
+    assert time.monotonic() - t0 < 1.0

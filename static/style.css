@@ -99,3 +99,12 @@
   #notice span { flex: 1; }
   #notice button { padding: 0 8px; border: none; background: none; font-size: 18px; line-height: 1; }
   #unclearBadge { display: inline-block; margin-bottom: 6px; padding: 1px 8px; border: 1px solid var(--typing); border-radius: 10px; color: var(--typing); font-size: 12px; }
+
+  /* Deleting a video: trash button in Recent videos, confirmation dialog, Undo in the notice. */
+  #recentList .deleteBtn { padding: 0 6px; border: none; background: none; color: var(--muted); opacity: .6; }
+  #recentList .deleteBtn:hover { color: var(--bad); opacity: 1; }
+  #deleteDialog { max-width: 420px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); }
+  #deleteDialog::backdrop { background: rgba(0, 0, 0, .4); }
+  #deleteDialog .row { justify-content: flex-end; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  #noticeAction { padding: 2px 12px; font-size: 14px; }

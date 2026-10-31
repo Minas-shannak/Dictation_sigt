@@ -187,6 +187,30 @@ def replace_with_converted(video_id: str, converted: Path) -> Dict:
         return dict(entry)
 
 
+def delete(video_id: str) -> List[str]:
+    """Delete an uploaded video: its stored file, conversion leftovers and its index entry.
+
+    Returns the removed file names; unknown videos just return [].
+    """
+    sha = _sha(video_id)
+    removed = []
+    with _lock:
+        index = _load_index()
+        entry = index.pop(sha, None)
+        root = _dir().resolve()
+        names = {entry.get("stored_name")} if entry else set()
+        names |= {p.name for p in _dir().glob(f"{sha}.converted.mp4*")} if _dir().exists() else set()
+        for name in sorted(n for n in names if n):
+            path = _dir() / name
+            if path.resolve().parent == root and path.is_file():
+                path.unlink()
+                removed.append(name)
+        if entry is not None:
+            _save_index(index)
+    log.info("Deleted uploaded video %s: %s", video_id, removed or "no files left")
+    return removed
+
+
 def cleanup(now: Optional[float] = None, startup: bool = False) -> List[str]:
     """Delete videos not opened for UPLOAD_RETENTION_DAYS; return their video_ids.
 

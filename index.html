@@ -8,12 +8,20 @@
   // Applied before first paint so a saved theme doesn't flash.
   try { const t = localStorage.getItem("dictation:theme"); if (t) document.documentElement.dataset.theme = JSON.parse(t); } catch {}
 </script>
-<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body>
 <main>
   <div id="notice" class="hidden" role="status"><span id="noticeText"></span>
+    <button id="noticeAction" class="hidden" type="button"></button>
     <button id="noticeClose" type="button" aria-label="Close">×</button></div>
+  <dialog id="deleteDialog">
+    <p id="deleteText"></p>
+    <div class="row">
+      <button id="deleteCancel" type="button">Cancel</button>
+      <button id="deleteConfirm" class="danger" type="button">Delete</button>
+    </div>
+  </dialog>
   <header>
     <h1>Dictation</h1>
     <button id="themeBtn" type="button" title="Switch light / dark theme"></button>
@@ -121,6 +129,6 @@
   </section>
 </main>
 
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>

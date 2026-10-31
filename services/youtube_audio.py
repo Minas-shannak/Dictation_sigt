@@ -16,6 +16,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Dict, Iterator, Optional
@@ -107,13 +108,20 @@ class _Logger:
         log.error("yt-dlp: %s", msg)
 
 
+class _Stopped(BaseException):
+    """Raised inside yt-dlp's progress hook to end an abandoned download thread."""
+
+
 @contextmanager
 def downloaded_audio(video_id: str, check: Optional[Callable[[], None]] = None,
                      on_progress: Optional[Callable[[float], None]] = None,
                      on_info: Optional[Callable[[Dict], None]] = None) -> Iterator[str]:
     """Yield the path of the video's audio-only stream, downloaded to a temporary folder.
 
-    check() is called with every progress update and may raise to stop the download.
+    check() is called about four times a second and may raise to stop the download.
+    yt-dlp runs in a background thread, because YouTube can hold a connection for many
+    seconds without any progress (and so without any chance to check); a stopped
+    download is abandoned at once and its thread ends at its next progress update.
     on_progress(fraction) reports the downloaded share; on_info(info) receives yt-dlp's
     metadata (title, duration) before downloading. The folder is deleted afterwards,
     also on failure or cancellation. Raises YouTubeError with a user-facing message.
@@ -121,14 +129,16 @@ def downloaded_audio(video_id: str, check: Optional[Callable[[], None]] = None,
     if not VIDEO_ID_RE.match(video_id or ""):
         raise YouTubeError("invalid_link", "That doesn't look like a YouTube video link.")
     folder = tempfile.mkdtemp(prefix="dictation-youtube-")
+    stop = threading.Event()
+    shared: Dict = {"progress": None, "info": None, "error": None}
 
     def hook(d):
-        if check:
-            check()
-        if d.get("status") == "downloading" and on_progress:
+        if stop.is_set():
+            raise _Stopped()
+        if d.get("status") == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             if total:
-                on_progress(min(1.0, d.get("downloaded_bytes", 0) / total))
+                shared["progress"] = min(1.0, d.get("downloaded_bytes", 0) / total)
 
     opts = {
         "format": "bestaudio/best",          # audio only when YouTube offers it (it always has)
@@ -150,28 +160,59 @@ def downloaded_audio(video_id: str, check: Optional[Callable[[], None]] = None,
         log.warning("No Deno found for yt-dlp's YouTube challenge; some videos may fail. "
                     "Install it in the venv: uv pip install -r requirements.txt")
     url = f"https://www.youtube.com/watch?v={video_id}"
-    try:
+    info_ready, go_on = threading.Event(), threading.Event()
+
+    def work():
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
-                    raise YouTubeError("live", "Live streams can't be transcribed. Try again after the stream has ended.")
-                if check:
-                    check()
-                if on_info:
-                    on_info(info)
-                log.info("Downloading audio of %s (%r, %ss, format %s)", video_id, info.get("title"),
-                         info.get("duration"), info.get("format"))
-                ydl.process_ie_result(info, download=True)
-        except yt_dlp.utils.DownloadError as e:
-            log.error("yt-dlp failed for %s: %s", video_id, e)
-            raise friendly_error(e) from e
+                shared["info"] = ydl.extract_info(url, download=False)
+                info_ready.set()
+                go_on.wait()  # the caller checks the info (live stream?) first
+                if stop.is_set():
+                    return
+                ydl.process_ie_result(shared["info"], download=True)
+        except BaseException as e:  # reported to the caller (or ignored after a stop)
+            shared["error"] = e
+        finally:
+            info_ready.set()
+
+    thread = threading.Thread(target=work, name=f"yt-dlp-{video_id}", daemon=True)
+    try:
+        thread.start()
+        while not info_ready.wait(0.25):
+            if check:
+                check()
+        info = shared["info"]
+        if info is not None:
+            if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
+                raise YouTubeError("live", "Live streams can't be transcribed. Try again after the stream has ended.")
+            if on_info:
+                on_info(info)
+            log.info("Downloading audio of %s (%r, %ss, format %s)", video_id, info.get("title"),
+                     info.get("duration"), info.get("format"))
+        go_on.set()
+        while thread.is_alive():
+            thread.join(0.25)
+            if check:
+                check()
+            if on_progress and shared["progress"] is not None:
+                on_progress(shared["progress"])
+        error = shared["error"]
+        if isinstance(error, yt_dlp.utils.DownloadError):
+            log.error("yt-dlp failed for %s: %s", video_id, error)
+            raise friendly_error(error) from error
+        if error is not None:
+            raise error
         files = [f for f in os.listdir(folder) if not f.endswith((".part", ".ytdl"))]
         if not files:
             log.error("yt-dlp finished for %s but left no audio file in %s", video_id, folder)
             raise YouTubeError("youtube_failed", "YouTube audio is unavailable right now. " + UPDATE_HINT)
         path = os.path.join(folder, files[0])
+        if on_progress:
+            on_progress(1.0)
         log.info("Downloaded audio of %s: %s (%d bytes)", video_id, files[0], os.path.getsize(path))
         yield path
     finally:
+        stop.set()      # an abandoned download ends at its next progress update
+        go_on.set()
         shutil.rmtree(folder, ignore_errors=True)

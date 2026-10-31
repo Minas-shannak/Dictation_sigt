@@ -131,6 +131,23 @@ class JobManager:
         log.info("Job %s (%s) cancellation requested", job.id[:8], job.kind)
         return True
 
+    def cancel_where(self, match: Callable[[Hashable], bool]) -> list:
+        """Cancel every queued or running job whose key matches; returns their ids."""
+        with self._lock:
+            ids = [j.id for j in self._jobs.values() if not j.finished and match(j.key)]
+        for job_id in ids:
+            self.cancel(job_id)
+        return ids
+
+    def wait_finished(self, job_ids, timeout: float = 60.0) -> bool:
+        """Wait until the given jobs have finished; False on timeout."""
+        deadline = time.monotonic() + timeout
+        while any((j := self._jobs.get(i)) is not None and not j.finished for i in job_ids):
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.05)
+        return True
+
     def wait_idle(self, timeout: float = 30.0) -> None:
         """Block until no job is queued or running (for tests and scripts)."""
         deadline = time.monotonic() + timeout

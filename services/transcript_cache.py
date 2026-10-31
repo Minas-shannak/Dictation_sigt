@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -35,6 +36,8 @@ from ai.transcript_processor import process_transcript, resolve_settings
 log = logging.getLogger(__name__)
 
 HASH_CHUNK_BYTES = 1024 * 1024
+# The only video IDs the app creates: a YouTube ID or the SHA-256 of an uploaded file.
+VIDEO_ID_RE = re.compile(r"^(yt:[A-Za-z0-9_-]{11}|local:[0-9a-f]{64})$")
 
 EMPTY_MESSAGES = {
     "no_speech": "No speech was found in this video.",
@@ -79,6 +82,10 @@ def file_sha256(path: str) -> str:
 def local_source(path: str, original_filename: Optional[str] = None) -> Source:
     """A local file is identified by its content, never by its name."""
     return Source("local", file_sha256(path), original_filename or Path(path).name)
+
+
+def is_valid_video_id(video_id: str) -> bool:
+    return bool(VIDEO_ID_RE.fullmatch(video_id or ""))
 
 
 # --- Keys and files -------------------------------------------------------------------
@@ -144,6 +151,29 @@ def _read_entry(path: Path, kind: str, key: str) -> Optional[Dict]:
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def delete_cached(video_id: str) -> List[str]:
+    """Delete every cached transcript of a video (both layers, every model/settings variant).
+
+    Only files directly inside the two cache folders whose names start with the
+    video's prefix are removed; returns their names.
+    """
+    if not is_valid_video_id(video_id):
+        raise ValueError(f"invalid video id: {video_id!r}")
+    prefix = video_id.replace(":", "-") + "__"
+    removed = []
+    for folder in (Path(config.ASR_CACHE_DIR), Path(config.TRANSCRIPT_CACHE_DIR)):
+        if not folder.is_dir():
+            continue
+        root = folder.resolve()
+        for path in folder.iterdir():
+            if not (path.name.startswith(prefix) and path.is_file()) or path.resolve().parent != root:
+                continue
+            path.unlink()
+            removed.append(f"{folder.name}/{path.name}")
+    log.info("Deleted %d cached transcript files of %s", len(removed), video_id)
+    return removed
 
 
 # --- Validation and the unified format ------------------------------------------------

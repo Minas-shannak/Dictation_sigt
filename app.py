@@ -18,7 +18,7 @@ from ai.transcriber import current_device
 from services import migration, uploads
 from services.audio_extractor import convert_for_browser, extracted_audio, remove_stale_temp_files
 from services.jobs import Job, JobManager
-from services.transcript_cache import Source, get_transcript, youtube_source
+from services.transcript_cache import Source, delete_cached, get_transcript, is_valid_video_id, youtube_source
 from services.youtube_audio import downloaded_audio, extract_video_id
 
 PORT = 8000
@@ -202,6 +202,21 @@ def api_cancel_job(job_id):
         return _error("job_not_found", "This job is no longer known.", 404)
     jobs.cancel(job_id)
     return jsonify(jobs.status(job_id))
+
+
+@app.delete("/api/videos/<video_id>")
+def api_delete_video(video_id):
+    """Delete everything the app stores for a video: cached transcripts (all variants) and,
+    for an upload, the stored file. Jobs for it are cancelled first."""
+    if not is_valid_video_id(video_id):
+        return _error("invalid_id", "That is not a video ID this app uses.", 400)
+    cancelled = jobs.cancel_where(lambda key: isinstance(key, tuple) and len(key) > 1 and key[1] == video_id)
+    if not jobs.wait_finished(cancelled, timeout=60):
+        return _error("busy", "A job for this video is still stopping. Try again in a moment.", 409)
+    removed = {"cancelled_jobs": cancelled, "cache": delete_cached(video_id), "files": []}
+    if video_id.startswith("local:"):
+        removed["files"] = uploads.delete(video_id)
+    return jsonify({"deleted": video_id, **removed})
 
 
 @app.get("/media/<video_id>")

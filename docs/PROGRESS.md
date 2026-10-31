@@ -965,6 +965,12 @@ Sentences marked unclear at each threshold:
 13. **Upload a video of your own** (e.g. an MP4 from your phone). It processes, plays and behaves like a YouTube video. If it's HEVC/MOV, Convert works.
 14. **Recent videos:** YouTube and uploaded entries show titles and filenames, and reopen instantly from the cache.
 15. **Typing feel:** Backspace across words, auto-filled punctuation, required spaces, accents and curly quotes not counted as mistakes.
+16. **Deleting a video:**
+    - The 🗑 on a Recent videos entry asks for confirmation, naming the video.
+    - **Undo** within 8 s keeps everything.
+    - Reloading during the 8 s keeps everything.
+    - Letting the 8 s pass removes it. Reopening it from YouTube transcribes it again; an uploaded file has to be uploaded again.
+    - Other videos and their stats are unaffected.
 
 ### Files changed
 - New: `services/migration.py`, `tests/test_migration.py`.
@@ -976,3 +982,57 @@ Sentences marked unclear at each threshold:
 ### Not done / next (Phase 8)
 - The section 18 test list in full, especially playback-timing judgements on real listening (the checklist above) and the media tests not yet covered (speech over background music, fast speech on a full video).
 - The fullscreen check needs a real browser window.
+
+## Deleting a video (added before Phase 8, Nov 1, 2026)
+
+### Answers first
+- **Checklist results:** none received yet, so there were no failed items to fix first. Any items that fail when you run the checklist will be fixed before Phase 8.
+- **Overall stats across videos:** **none exist.** Every figure (WPM, accuracy, missed words, the per-video average in Recent videos) is stored in that one video's browser record and computed from it. Deleting a video changes no other figures, so nothing needed implementing for that part.
+
+### Done
+- **PLAN.md:** decision 16 (what is deleted, confirm + undo, edge cases, ID validation).
+- **Server:** `DELETE /api/videos/<id>`.
+  - **ID validation:** only `yt:<11 chars>` or `local:<64 hex>` (`is_valid_video_id`); anything else gets 400.
+  - **Jobs first:** it **cancels** the video's queued or running jobs (transcription, download, conversion) via `JobManager.cancel_where()`, waits for them to stop (`wait_finished`, up to 60 s, otherwise 409 "try again"), then deletes:
+    - **`transcript_cache.delete_cached()`:** every layer-1 and layer-2 file named `<id>__*.json`, only directly inside `cache/asr/` and `cache/transcripts/` (resolved-path check)
+    - **`uploads.delete()`:** for an upload, the stored file, conversion leftovers and the index entry, only inside `uploads/`
+  - **Never touched:** backups, old caption files, other videos.
+- **Browser:**
+  - a 🗑 button on each Recent videos entry, and a confirmation dialog naming the video (title or filename, saying what gets deleted)
+  - after confirming, the entry disappears and the notice shows "… will be deleted." with **Undo** for 8 s
+  - the pending deletion is kept only in memory, so a reload or closed page deletes nothing
+  - when the window ends: leave the video if it is open or being processed, call the server, and only after it succeeds remove the browser record (progress, stats, missed words, offset); on a server error, the entry comes back with a message
+  - pre-Phase-6 records (bare IDs) are removed in the browser only
+- **YouTube download cancel made responsive** (found while testing deletion):
+  - **Problem:** YouTube held a connection for 14 s without data, and yt-dlp's progress hook, the only place that checked for cancellation, didn't run during that time. A cancel (Cancel button or deletion) waited up to 14 s.
+  - **Fix:** yt-dlp now runs in a background thread. The job checks for cancellation every 0.25 s, and a stopped download is abandoned at once (its thread ends at its next progress update; the temp folder is deleted).
+  - **Measured on a real download:** cancel requested at 2.0 s took effect at 2.00 s, with no temp folder left.
+
+### Tests run (real results)
+- **pytest: 231 passed.** New:
+  - **`test_delete_video.py` (13):**
+    - **YouTube:** all variants in both layers deleted, other videos, old caption files and backups untouched, a second delete is harmless
+    - **Upload:** file, conversion leftover, index entry and both layers deleted; `/media` → 404
+    - **Running job:** cancelled first, then deletion; the other video's job left alone
+    - **Invalid IDs and path tricks** (9) → rejected and nothing deleted; the helpers refuse bad IDs
+  - **YouTube download:** a stalled download (no data) is cancelled within 1 s.
+- **Browser, headless Firefox, real YouTube + upload (scratch data): 13 of 13 passed.**
+  - **Dialog and undo:** the dialog names the video; Cancel keeps everything; the entry hides with an Undo notice; Undo brings it back and after 9 s nothing is deleted; a reload during the window brings it back and deletes nothing.
+  - **Upload deleted:** after the window, the stored file, index entry and both cache layers are gone, along with the browser record. The YouTube video's data is untouched.
+  - **Deleting during a running download:** the job was cancelled 26 ms after the request, and everything was deleted 8.2 s after confirming.
+  - **YouTube video deleted:** all variants and the record are gone.
+- **Section 15 regression re-run: 66 of 68.** The same 2 fullscreen items fail (headless only). The console showed 2 messages from YouTube's own player script ("postMessage … target origin does not match"), which appear when a YouTube player is created and removed quickly. They are harmless and not from the app's code.
+
+### Real migration observed
+**You started the app during this session**, so the real one-time migration ran at 01:12:07:
+- **Server:** `backup/pre-audio-pipeline-20261101-011207/cache/` holds all 7 old caption files. Each matches its manifest checksum and is **byte-identical** to the originals (compared with the dry-run copies); the originals were then removed from `cache/`.
+- **Browser:** at 01:12:14 a page at **`http://127.0.0.1:8000`** backed up its 8 keys (old records for 4 videos, sound, theme, two new `yt:` records) to `localStorage-20261101-011214-541291.json`, then cleared the old ones.
+- **Note:** browsers treat `127.0.0.1:8000` and `localhost:8000` as different sites with separate storage. The `localhost:8000` data (Rise of the Guardians, Frozen, volume 6) is still in Firefox and will be backed up and cleared the first time you open `http://localhost:8000`.
+
+### Files changed
+- New: `tests/test_delete_video.py`.
+- Changed:
+  - server: `app.py`, `services/transcript_cache.py`, `services/uploads.py`, `services/jobs.py`, `services/youtube_audio.py`
+  - frontend: `static/app.js`, `static/style.css`, `index.html` (`app.js?v=7`, `style.css?v=4`)
+  - tests: `tests/test_youtube_audio.py`
+  - docs: `README.md`, `docs/PLAN.md`, `docs/PROGRESS.md`

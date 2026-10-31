@@ -198,6 +198,16 @@ The bar under them fills as you finish lines, with the video time on the right.
 Clicking the video also replays the line. Shortcuts are configured in the `SHORTCUTS` object
 at the top of `static/app.js`.
 
+## Deleting a video
+
+Each entry in Recent videos has a 🗑 button. After you confirm, the entry disappears and an **Undo**
+notice shows for 8 seconds; only then is everything for that video deleted: its saved progress,
+statistics, missed words and timing offset, all its cached transcripts (every model/settings
+variant), and for an uploaded video the stored file. A running download, transcription or
+conversion for it is stopped first. If you close or reload the page during those 8 seconds,
+nothing is deleted. Statistics are per video only, so no other figures change. Backups in
+`backup/` are never touched.
+
 ## Stats
 
 - **WPM**: (characters you typed on the line / 5) / minutes, counting from your first keystroke on

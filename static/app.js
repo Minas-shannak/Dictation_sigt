@@ -158,14 +158,16 @@ function startPractice(data, lang, makePlayer, info = {}) {
 }
 
 function renderRecent() {
-  const recs = allVideoRecords();
+  // A video waiting out its undo window is already gone from the list.
+  const recs = allVideoRecords().filter((r) => !pendingDelete || r.id !== pendingDelete.rec.id);
   $("recent").classList.toggle("hidden", recs.length === 0);
   const list = $("recentList");
   list.textContent = "";
   for (const rec of recs) {
     const li = document.createElement("li");
     const avg = videoAverages(rec);
-    li.innerHTML = `<span class="title"></span><span class="muted"></span><span class="muted"></span>`;
+    li.innerHTML = `<span class="title"></span><span class="muted"></span><span class="muted"></span>` +
+      `<button class="deleteBtn" type="button" title="Delete this video" aria-label="Delete this video">🗑</button>`;
     const local = rec.id.startsWith("local:");
     li.children[0].textContent = rec.title || rec.id;
     li.children[1].textContent = rec.expired ? "file expired, upload it again" : `line ${rec.lineIndex + 1} of ${rec.lineCount}`;
@@ -177,16 +179,87 @@ function renderRecent() {
       $("urlInput").value = `https://www.youtube.com/watch?v=${youtubeId}`;
       loadVideo(youtubeId, rec.lang || "en");
     });
+    li.children[3].addEventListener("click", (e) => { e.stopPropagation(); askDelete(rec); });
     list.appendChild(li);
   }
 }
 
 // ---- Notices ------------------------------------------------------------------------------
-function showNotice(text) {
+// action: optional { label, onClick } shown as a button (e.g. Undo).
+function showNotice(text, action = null) {
   $("noticeText").textContent = text;
+  $("noticeAction").classList.toggle("hidden", !action);
+  $("noticeAction").textContent = action ? action.label : "";
+  $("noticeAction").onclick = action ? action.onClick : null;
   $("notice").classList.remove("hidden");
 }
-$("noticeClose").addEventListener("click", () => $("notice").classList.add("hidden"));
+function hideNotice() { $("notice").classList.add("hidden"); }
+$("noticeClose").addEventListener("click", hideNotice);
+
+// ---- Deleting a video -----------------------------------------------------------------------
+// After confirming, the entry disappears and an Undo notice shows for UNDO_SECONDS; only then is
+// anything deleted (server: cached transcripts of every variant and, for an upload, the stored
+// file; browser: the video's record with its progress, stats, missed words and offset). The
+// pending deletion lives only in memory, so closing or reloading the page cancels it.
+const UNDO_SECONDS = 8;
+let pendingDelete = null;  // { rec, timer }
+
+function videoName(rec) { return rec.title || rec.id; }
+
+function askDelete(rec) {
+  const what = rec.id.startsWith("local:")
+    ? "its saved progress, statistics, missed words, transcripts and the uploaded video file are deleted."
+    : "its saved progress, statistics, missed words and transcripts are deleted (the video on YouTube is not affected).";
+  $("deleteText").textContent = `Delete "${videoName(rec)}"? Everything the app keeps for it: ${what}`;
+  $("deleteDialog").returnValue = "";
+  $("deleteDialog").onclose = () => { if ($("deleteDialog").returnValue === "delete") startDelete(rec); };
+  $("deleteDialog").showModal();
+  $("deleteCancel").focus();
+}
+$("deleteCancel").addEventListener("click", () => $("deleteDialog").close("cancel"));
+$("deleteConfirm").addEventListener("click", () => $("deleteDialog").close("delete"));
+
+function startDelete(rec) {
+  if (pendingDelete) commitDelete();  // one at a time: finish the earlier one now
+  pendingDelete = { rec, timer: setTimeout(commitDelete, UNDO_SECONDS * 1000) };
+  renderRecent();
+  showNotice(`"${videoName(rec)}" will be deleted.`, { label: "Undo", onClick: undoDelete });
+}
+
+function undoDelete() {
+  if (!pendingDelete) return;
+  clearTimeout(pendingDelete.timer);
+  pendingDelete = null;
+  hideNotice();
+  renderRecent();
+}
+
+async function commitDelete() {
+  if (!pendingDelete) return;
+  const { rec, timer } = pendingDelete;
+  clearTimeout(timer);
+  pendingDelete = null;
+  hideNotice();
+  // Leave the video first if it is open or being processed here.
+  if (state.data && state.data.video_id === rec.id && !$("practiceScreen").classList.contains("hidden")) $("backBtn").click();
+  if (local.video && local.video.video_id === rec.id) {
+    local.job = local.convertJob = null;
+    $("processing").classList.add("hidden");
+  }
+  if (rec.id.includes(":")) {  // records from before Phase 6 (bare IDs) have nothing on the server
+    try {
+      const res = await fetch(`/api/videos/${encodeURIComponent(rec.id)}`, { method: "DELETE" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.message || `HTTP ${res.status}`);
+    } catch (err) {
+      showNotice(`"${videoName(rec)}" could not be deleted: ${err.message}`);
+      renderRecent();
+      return;
+    }
+  }
+  try { localStorage.removeItem(STORE_PREFIX + "video:" + rec.id); } catch {}
+  renderRecent();
+}
 
 // ---- One-time clean start ---------------------------------------------------------------------
 // Progress saved by the caption-based version (records keyed by a bare YouTube ID) doesn't
