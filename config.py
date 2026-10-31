@@ -17,9 +17,13 @@ CUDA_COMPUTE_TYPE = "float16"
 CPU_COMPUTE_TYPE = "int8"
 # Language passed to Whisper when the caller gives none; None = auto-detect.
 DEFAULT_LANGUAGE = "en"
-VAD_FILTER = True                    # skip silence before decoding (timestamps stay on the original timeline)
-# Speech probability above which the VAD keeps audio (faster-whisper's default: 0.5).
-# Lower keeps more speech that is mixed with music.
+# Voice activity detection before decoding. Off by default: on a movie clip it
+# dropped 36 of 56 dialogue lines spoken over the music score (1 of 56 with it
+# off); the hallucination filter handles what Whisper writes for music/silence.
+# Timestamps are on the original timeline either way.
+VAD_FILTER = False
+# Speech probability above which the VAD keeps audio, when VAD_FILTER is on
+# (faster-whisper's default: 0.5). Lowering it barely helped speech mixed with music.
 VAD_THRESHOLD = 0.5
 CONDITION_ON_PREVIOUS_TEXT = False   # reduces repetition loops
 BEAM_SIZE = 5                        # faster-whisper's default
@@ -30,7 +34,7 @@ INITIAL_PROMPT = ""
 
 # --- Transcript processing (ai/transcript_processor.py) ----------------------
 # Bump whenever processing logic changes in a way that changes the sentences.
-PROCESSING_VERSION = 2
+PROCESSING_VERSION = 3
 
 # Hallucination filter. A segment is excluded from the training transcript (but
 # kept in the raw result) if any rule matches. The defaults for the first two

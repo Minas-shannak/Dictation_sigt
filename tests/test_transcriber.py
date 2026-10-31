@@ -79,7 +79,7 @@ def test_raw_result_keeps_segments_words_and_settings(fake):
     assert [s["start"] for s in r["segments"]] == [0.0, 5.0]
     assert r["segments"][0]["words"][0] == {"word": " hello", "start": 0.0, "end": 2.0, "probability": 0.9}
     assert r["segments"][0]["no_speech_prob"] == 0.01
-    assert r["asr_settings"]["vad_filter"] is True and r["asr_settings"]["condition_on_previous_text"] is False
+    assert r["asr_settings"]["vad_filter"] is False and r["asr_settings"]["condition_on_previous_text"] is False
     opts = fake.models[0].calls[0][1]
     assert opts["word_timestamps"] is True and opts["language"] == "en"
 

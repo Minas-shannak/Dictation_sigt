@@ -26,6 +26,14 @@ Answers to the Phase 1 open questions. These are **\[Decided\]** items.
 6. **Upload limit:** 2 GB.
 7. **Git identity:** keep the configured git email as it is.
 
+Decided after the Phase 3 experiments:
+
+8. **VAD off by default:** `vad_filter=False` (configurable, part of the layer-1 cache key). On a movie clip VAD dropped 36 of 56 dialogue lines spoken over the score (1 of 56 with VAD off); the hallucination filter handles what Whisper writes for music and silence. No "has music" UI option.
+9. **Very short exercises** ("Two.", "Make that five.") and small mishearings such as "3D" are acceptable.
+10. **Model:** `small` stays the working default until experiment C is reviewed; model and prompt are part of the layer-1 key, so this does not block Phase 4.
+11. **Lowercase "i":** standalone "i", "i'm", "i'll", "i've", "i'd" become "I..." in the training transcript only (section 10A).
+12. **YouTube captions** may be used only as a test reference in `tests/` and `docs/`, never in application code.
+
 ## 1. Main Objective
 
 I have an existing personal web application built with Flask, HTML, CSS and JavaScript. It is used for practicing English listening and typing with YouTube videos. It currently retrieves captions with `youtube-transcript-api`, splits them into sentence-sized segments, and uses them for dictation exercises.
@@ -216,6 +224,7 @@ Audio extraction is separate from transcription. The extraction service returns 
 
 - Implement a dedicated YouTube audio service, isolated in its own module so it can be disabled or replaced without touching anything else.
 - Do not fetch captions. Remove `youtube-transcript-api` from the transcription path.
+- **\[Decided\]** YouTube captions may be used only as a test reference (`tests/reference/`, `tests/tools/`, `docs/`), never in application code.
 - **\[Decided\]** use `yt-dlp`, requesting the audio-only stream, then FFmpeg preprocessing. I accept that YouTube's terms generally do not permit downloading outside YouTube's own features; this app is for my personal, local study of publicly accessible videos.
 - Limits that always apply: never bypass DRM, age gates, login walls, private or members-only restrictions; never store downloaded audio beyond the temporary file needed for transcription.
 - `yt-dlp` breaks periodically when YouTube changes. When it fails, show a clear message (for example: YouTube audio is unavailable; try updating yt-dlp or use local upload) and log the real error. Pin it in requirements, and document how to update it.
@@ -228,6 +237,7 @@ Library: [faster-whisper](https://github.com/SYSTRAN/faster-whisper). Check its 
 ### A. Model
 
 - Start with `small`. Do not download multiple models automatically.
+- Compared on real clips (experiment C, see PROGRESS.md): small / small + prompt / large-v3 / large-v3 + prompt / large-v3-turbo. The default is chosen after that review.
 - Configurable via one setting (config file or environment variable), not hardcoded: `tiny`, `base`, `small`, `medium`, `large-v3`, and `large-v3-turbo` if the installed version supports it.
 
 ### B. Loading strategy
@@ -257,7 +267,7 @@ segments, info = model.transcribe(
     audio_path,
     language="en",                    # configurable; None = auto-detect
     word_timestamps=True,
-    vad_filter=True,
+    vad_filter=False,                 # [Decided] off by default, configurable (see 0.1 item 8)
     condition_on_previous_text=False,  # reduces repetition loops
 )
 ```
@@ -379,6 +389,7 @@ faster-whisper word tokens are not clean words:
 - Punctuation is attached to the word (`"English."`, `"Well,"`). Keep it attached for display, and keep a separate punctuation-free form for typing validation, consistent with how the existing engine handles punctuation.
 - Contractions may be split oddly (`"don"` + `"'t"`). Merge such fragments into one word, combining their timestamps (start of the first, end of the last).
 - Normalize curly quotes and apostrophes the same way the existing engine does.
+- **\[Decided\]** Standalone lowercase "i", "i'm", "i'll", "i've", "i'd" become "I", "I'm", ... in the training transcript only (larger models often write them lowercase).
 
 ### B. Numbers
 
@@ -388,6 +399,7 @@ Whisper may write numbers as digits ("5", "$20", "1990s") or as words. This affe
 - Use a small library such as `num2words` rather than hand-written rules.
 - Handle common forms: integers ("5" to "five"), decimals ("3.5" to "three point five"), ordinals ("1st" to "first"), years ("1990" to "nineteen ninety"), decades ("1990s" to "nineteen nineties"), currency ("$20" to "twenty dollars"), percentages ("50%" to "fifty percent").
 - Ambiguous or unrecognized patterns (phone numbers, codes, mixed tokens) stay as written and are logged, rather than guessed.
+- Four-digit numbers 1000–2099 without a comma use the year-style reading, which also reads clock times Whisper writes as "1030" correctly ("ten thirty"); "1,030" stays "one thousand and thirty".
 - Timing: the words produced from one number token all keep that token's original `start` and `end`. Do not split its duration across them.
 - Make the conversion a processing setting, so it can be turned off later without retranscribing.
 

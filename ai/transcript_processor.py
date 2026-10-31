@@ -42,6 +42,7 @@ ELLIPSIS_END_RE = re.compile(r"(\.\.\.|…)[\"')\]]*$")
 CONTRACTION_PART_RE = re.compile(r"^(['’](s|t|re|ve|ll|d|m)|n['’]t)\W*$", re.I)
 CURLY = str.maketrans({"‘": "'", "’": "'", "‚": "'", "‛": "'", "“": '"', "”": '"', "„": '"'})
 MUSIC_SYMBOLS_RE = re.compile(r"[♪♫♬]")
+LOWERCASE_I_RE = re.compile(r"i('m|'ll|'ve|'d)?")
 # Leading punctuation, the token itself, trailing punctuation.
 TOKEN_RE = re.compile(r"^([\"'(\[]*)(.*?)([.,?!;:…\"')\]]*)$", re.S)
 SCALE_WORDS = {"thousand", "million", "billion", "trillion"}
@@ -137,6 +138,14 @@ def _normalize_segment_words(seg: Dict, first_index: int, punctuated: bool) -> L
             out.append({"word": text, "start": w["start"], "end": w["end"], "probability": w["probability"],
                         "source": [first_index + k], "punctuated": punctuated})
     return out
+
+
+def _capitalize_i(words: List[Dict]) -> None:
+    """Standalone "i", "i'm", "i'll", "i've", "i'd" -> "I..." (some models write them lowercase)."""
+    for w in words:
+        lead, core, trail = TOKEN_RE.match(w["word"]).groups()
+        if LOWERCASE_I_RE.fullmatch(core):
+            w["word"] = lead + "I" + core[1:] + trail
 
 
 # --- 3. Cleaning ----------------------------------------------------------------
@@ -245,7 +254,8 @@ def number_to_words(core: str, next_core: str = "") -> Optional[List[str]]:
         if len(c) >= 8 and "," not in core:
             return None  # phone numbers, IDs
         n = int(c)
-        if len(c) == 4 and 1100 <= n <= 2099:
+        # Year-style reading also covers clock times Whisper writes as "1030" ("ten thirty").
+        if len(c) == 4 and 1000 <= n <= 2099 and "," not in core:
             return num2words(n, lang="en", to="year").split()
         return _words(n)
     return None
@@ -427,6 +437,7 @@ def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
     left_as_is: List[str] = []
     pieces: List[List[Dict]] = []
     for run in runs:
+        _capitalize_i(run)
         a, f = _clean(run, s)
         n_annotations += a
         n_fillers += f

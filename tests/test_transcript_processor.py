@@ -127,6 +127,9 @@ def test_fragments_are_not_merged_across_segments():
     ("22nd", "", "twenty-second"),
     ("1990", "", "nineteen ninety"),
     ("2024", "", "twenty twenty-four"),
+    ("1030", "", "ten thirty"),
+    ("1066", "", "ten sixty-six"),
+    ("1,030", "", "one thousand and thirty"),
     ("1990s", "", "nineteen nineties"),
     ("'90s", "", "nineties"),
     ("80s", "", "eighties"),
@@ -366,21 +369,40 @@ def real(request):
     return request.param, raw, result
 
 
-def test_real_clips_have_no_false_hallucination_flags(real):
-    _, _, r = real
-    assert r["excluded_segments"] == 0
+# What the filter excludes on the real clips (VAD off). Speech clips: nothing. Movie: Whisper's
+# guesses during the music score, checked against the caption reference: "Sigh." (a sound),
+# duplicate counts "Four."/"Three." (the reference has each once, and the first copy is kept);
+# "Jack!", "Whoa!", "Oh", "Huh." are single low-confidence words with no reference line.
+EXPECTED_EXCLUSIONS = {
+    "conversation": [], "music": [], "numbers": [],
+    "movie": ["Sigh.", "Jack!", "Whoa!", "Oh", "Huh.", "Four.", "Three."],
+}
+
+
+def test_real_clips_exclude_only_the_known_hallucinations(real):
+    name, _, r = real
+    assert [e["text"] for e in r["excluded"]] == EXPECTED_EXCLUSIONS[name]
 
 
 def test_real_clips_keep_every_word_with_its_original_timestamps(real):
     _, raw, r = real
     raw_words = [w for s in raw["segments"] for w in s["words"]]
+    excluded_segments = {e["segment"] for e in r["excluded"]}
+    in_excluded, k = set(), 0
+    for si, seg_ in enumerate(raw["segments"]):
+        for _ in seg_["words"]:
+            if si in excluded_segments:
+                in_excluded.add(k)
+            k += 1
     used = set()
     for w in all_words(r):
         first, last = raw_words[w["source"][0]], raw_words[w["source"][-1]]
         assert (w["start"], w["end"]) == (first["start"], max(x["end"] for x in (raw_words[i] for i in w["source"])))
         assert first["start"] <= last["start"]
         used.update(w["source"])
-    assert used == set(range(len(raw_words)))  # nothing dropped (no fillers or annotations in these clips)
+    removed_fillers = {i for i, w in enumerate(raw_words) if re.sub(r"[^\w]", "", w["word"]).lower() in ("um", "uh")}
+    # Every raw word is used, except excluded segments and removed fillers.
+    assert used == set(range(len(raw_words))) - in_excluded - removed_fillers
 
 
 def test_real_clips_sentences_are_ordered_and_sized(real):
@@ -399,8 +421,10 @@ def test_real_numbers_clip_reads_times_as_words():
     r = process_transcript(raw)
     text = r["training_transcript"]
     assert "ten thirty" in text and "twelve thirty" in text and "forty-five minutes" in text
-    assert "one p.m., two p.m., three p.m., etc." in text
-    assert re.findall(r"\S*\d\S*", text) == ["10-30.", "10-30."]  # the only ambiguous tokens, left as said
+    assert "one p.m., two p.m., three p.m., etc." in text and "eleven o'clock" in text
+    # Whisper wrote "1030" here, read like a year as "ten thirty"; only ambiguous tokens stay as written.
+    assert "1030" not in text and "one thousand" not in text
+    assert re.findall(r"\S*\d\S*", text) == ["3D", "10-30.", "10-30."]
 
 
 def _fixture_raw(name):
@@ -408,8 +432,8 @@ def _fixture_raw(name):
 
 
 @pytest.mark.parametrize("name, fillers", [
-    ("movie_novad", [("Uh,", 100.16), ("uh,", 125.62)]),
-    ("conversation_turbo", [("um", 43.8), ("um", 116.9)]),
+    ("movie", [("Uh,", 100.16), ("uh,", 125.62)]),
+    ("experiments/conversation_turbo", [("um", 43.8), ("um", 116.9)]),
 ])
 def test_real_fillers_are_removed_and_expressions_kept(name, fillers):
     raw = _fixture_raw(name)
@@ -432,6 +456,15 @@ def test_real_fillers_are_removed_and_expressions_kept(name, fillers):
 
 def test_real_silence_hallucination_is_excluded():
     # Whisper without VAD writes "You" for 20 s of silence.
-    r = process_transcript(_fixture_raw("silence_novad"))
+    r = process_transcript(_fixture_raw("silence"))
     assert [e["text"] for e in r["excluded"]] == ["You"]
     assert r["sentences"] == [] and r["empty_reason"] == "all_excluded"
+
+
+def test_lowercase_i_is_capitalized_in_the_training_transcript_only():
+    raw = raw_of(seg(timed("i think i'm right, i'll go, i've seen it, i'd say. Hi, it's in it, i.e. fine")))
+    before = copy.deepcopy(raw)
+    r = process_transcript(raw)
+    assert " ".join(texts(r)) == "I think I'm right, I'll go, I've seen it, I'd say. Hi, it's in it, i.e. fine"
+    assert raw == before  # the raw words keep their lowercase "i"
+    assert "i think i'm" in r["original_transcript"]

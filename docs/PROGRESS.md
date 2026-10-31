@@ -9,7 +9,7 @@ Update this file at the end of every phase. Commit after every phase.
 | --- | --- |
 | 1. Inspect the project | Done, approved. Decisions recorded in PLAN.md section 0.1 |
 | 2. Audio extraction and AI transcription | Done, approved |
-| 3. Transcript processing | Done, approved; follow-up (one-word rule, experiments) done, **waiting for review** |
+| 3. Transcript processing | Done, approved; follow-ups done. VAD off by default; **model choice pending** (experiment C below) |
 | 4. Unified format and caching | Not started |
 | 5. Background jobs and local upload | Not started |
 | 6. Replace the YouTube caption pipeline | Not started |
@@ -330,3 +330,145 @@ Each change was checked by printing all sentences of all three clips; samples ar
 - **Decisions needed:** the VAD default, model choice and prompt (recommendations above) affect the layer-1 cache key, so they should be settled before Phase 4.
 - **Speech with background music** (not a song or score) is still untested. So are `large-v3` (non-turbo) and the prompt on the numbers and movie clips.
 - **One-word sentences:** with VAD off the movie clip gives many short ones ("Two.", "Three. Two.", "Make that five."). That's correct for the dialogue, but it shows that counting scenes produce tiny exercises.
+
+## Phase 3 follow-up 2: VAD off, experiment C, lowercase "i" (Oct 31, 2026)
+
+### Decisions applied
+- **VAD:** `VAD_FILTER = False` by default (configurable, recorded in `asr_settings`, so part of the layer-1 key). No "has music" option.
+- **Short exercises** ("Two.", "Make that five.") and "3D" are accepted.
+- **Lowercase "i":** standalone "i"/"i'm"/"i'll"/"i've"/"i'd" become "I…" in the training transcript only; the raw result is untouched. Tested, and "i.e." is left alone.
+- **Captions:** used only as a test reference. Confirmed by grep:
+  - The **new pipeline** (`ai/`, `services/`, `config.py`) never reads captions. Its only mention is the hallucination phrase "captions by".
+  - The **current app** (`app.py`, the caption-based app that Phase 6 replaces) still imports `youtube-transcript-api` and serves captions through `/api/transcript`. That is the existing feature, not new code.
+  - **Test-only use:** `tests/reference/*.json` (fetched by a scratch script) and `tests/tools/evaluate_fixtures.py`.
+- **PLAN.md:** section 0.1 items 8–12, plus 5C, 6A, 6E, 10A and 10B updated.
+- `PROCESSING_VERSION = 3`.
+
+### Fixtures reorganized
+- **Main fixtures** (`tests/fixtures/*.json`) match the defaults: small, VAD off, no prompt. All five were re-transcribed on the GPU (cuda/float16): `conversation`, `numbers`, `movie`, `music`, `silence`.
+- **Everything else** is in `tests/fixtures/experiments/`: the earlier VAD-on runs (`*_vad.json`), the VAD-threshold runs (`*_vad025`, `*_vad01`), and the experiment C runs (`*_small_prompt`, `*_large-v3`, `*_large-v3_prompt`, `*_turbo`).
+- **References** (`tests/reference/`), YouTube captions for the clip sections, shifted to clip time:
+  - conversation: **manual** en-GB captions, the best reference
+  - numbers and movie: **auto** captions only, themselves machine-made, so their error rates are rough
+  - music: captions disabled, no reference
+- **Evaluation tool:** `tests/tools/evaluate_fixtures.py` computes WER of the processed training transcript vs the reference (same normalization for both: lowercase, no punctuation, numbers as words, fillers dropped, gonna→going to), punctuation counts, timing agreement, flagged segments and unreferenced sentences.
+
+### 1. All clips with VAD off (small, default)
+
+| Clip | Flagged (excluded) | Slipped through? | Real speech wrongly flagged? | Timing |
+| --- | --- | --- | --- | --- |
+| conversation | none | no kept sentence lacks a reference line | none | 720/720 matched words inside their reference line ±1.5 s; longest word 2.0 s ("saying") |
+| numbers | none | none | none | 565/565 matched words in place; longest word 1.2 s |
+| movie | 7: "Sigh." 30.0, "Jack!" 38.0, "Whoa!" 128.9, "Oh" 149.2, "Huh." 252.0, "Four." 293.5, "Three." 298.6 | **4 unverified sentences** at 39.7–67 s ("Jack! Jack!", "Come on, Jack.", "You guys have fun all the time.", "Jack, get down from there."): the auto-captions have nothing at 28.7–71.8 s. They are coherent and fit the scene, so most likely real dialogue the captions missed. **Needs a listen to 0:38–1:10.** | **none confirmed.** "Four."/"Three." are later duplicates of kept counts that match the reference (290.9 / 293.9). "Jack!" 38.0, "Whoa!", "Oh", "Huh." have no reference line, so unverifiable | 229/229 matched words in place, **but 2 stretched words**: "they're" 271.26–277.38 (6.1 s; the reference has "They're all going out." at 277.16) and "I'm" (3.2 s) |
+| music (song) | none this run (an earlier identical run flagged "Oh" and "Music") | no reference; 16 sentences of partly plausible lyrics, unverified | n/a | longest word 2.4 s ("no") |
+| silence | "You" (classic hallucination) | nothing | n/a | n/a |
+
+**Stretched words** are a timing problem for playback:
+- **What happens:** after music or a pause, Whisper sometimes stretches the first word back over the music. Its start is early and its end is correct.
+- **Where:** every model has some: up to 6.1 s (small, movie), 2.1–2.6 s (large-v3, movie), 11.1 s (small + prompt, movie).
+- **Effect:** the sentence starting with that word would start playing several seconds early.
+- **Constraint:** stored timestamps must stay unchanged (plan 9A).
+- **Proposal for Phase 7 (needs your decision):** a derived playback start for sentences whose first word is longer than a limit (e.g. 1.5 s): `play_start = word_end − limit`. The raw and stored word times stay as they are.
+
+**Song results are not reproducible:** an identical VAD-off run gave 79 words before and 108 now. Whisper re-decodes hard audio with random sampling (temperature fallback). Speech clips gave identical results across runs.
+
+### Bug found and fixed: "1030"
+- **Problem:** with VAD off, Whisper wrote the time "ten thirty" as "1030" (instead of "10.30"). The year rule only covered 1100–2099, so it became "one thousand and thirty".
+- **Fix:** 4-digit numbers 1000–2099 without a comma now use the year reading ("1030" → "ten thirty", "1066" → "ten sixty-six"); "1,030" → "one thousand and thirty". Tested.
+- **Result:** small's WER on the numbers clip went from 7.4% to 5.4%.
+
+### Experiment C: model and prompt (VAD off, GPU, cuda/float16)
+- **Settings:** prompt = "Hi, how are you? I'm fine, thanks. Well, let's talk about it. It's a long story, but I'll keep it short."
+- **Measurement:**
+  - **VRAM** is the peak for the process from nvidia-smi.
+  - **Ends/commas/lowercase i** are counted in the raw output; lowercase "i" is now fixed by processing anyway.
+  - **WER** is computed on the processed training transcript.
+- **First loads:** large-v3 took 138 s for its first load, mostly downloading about 3 GB, once; turbo about 74 s once.
+
+**Conversation** (manual reference, 755 words; the most reliable):
+
+| Run | Time | VRAM | WER | S/D/I | Ends | Commas | lowercase i |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| small | 3.6 s | 0.8 GB | 5.4% | 22/13/6 | 40 | 9 | 0 |
+| small + prompt | 3.8 s | 0.8 GB | 7.9% | 14/**39**/7 | 42 | 26 | 0 |
+| large-v3 | 11.5 s | 4.1 GB | 4.1% | 10/13/8 | 10 | 0 | 31 |
+| **large-v3 + prompt** | 11.9 s | 4.1 GB | **3.8%** | 8/14/7 | 18 | 9 | 15 |
+| large-v3-turbo | 4.6 s | 2.3 GB | 4.9% | 11/19/7 | 11 | 1 | 25 |
+
+Known error spots (✓ = matches the manual reference):
+
+| | small | small+P | large-v3 | large-v3+P | turbo |
+| --- | --- | --- | --- | --- | --- |
+| grass me up | ✗ | ✗ | ✓ | ✓ | ✓ |
+| dobbing | ✗ | ✗ | ✓ | ✓ | ✓ |
+| ciggy | ✗ | ✓ | ✓ | ✓ | ✓ |
+| up for a fall | ✗ | ✗ | ✓ | ✓ | ✓ |
+| rat someone out | ✗ | ✓ | ✓ | ✓ | ✓ |
+| goody two-shoes | ✓ | ✗ | ✗ | ✓ | ✗ |
+| mouth shut | ✓ | ✓ | ✓ | ✓ | ✗ |
+
+**small + prompt drops real speech:** "Yes, yes. Whereas.", "I did hang around with. As an adult.", "pet describes the student who is". The prompt makes small skip asides and repeats, which is unacceptable for dictation. large-v3 + prompt drops only the two spots every run misses ("don't think we I" self-correction at 19 s, "for the most part so you'd" at 177 s).
+
+**Movie** (auto-caption reference, 252 words; noisy, and many "insertions" are probably real lines the captions missed):
+
+| Run | Time | VRAM | WER | S/D/I | Ends | Commas | lowercase i | Flagged |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| small | 3.7 s | 0.9 GB | 18.7% | 15/8/24 | 65 | 19 | 0 | 7 |
+| small + prompt | 5.5 s | 1.0 GB | 22.6% | 7/18/32 | 66 | 23 | 0 | 10 |
+| large-v3 | 8.1 s | 4.1 GB | 19.0% | 4/25/19 | 48 | 18 | 0 | 1 |
+| **large-v3 + prompt** | 8.1 s | 4.1 GB | **17.9%** | **3**/23/19 | 48 | 18 | 0 | 1 |
+| large-v3-turbo | 4.7 s | 2.3 GB | 18.3% | 5/15/26 | 53 | 21 | 0 | 1 |
+
+**Numbers** (auto-caption reference, 595 words; "3/4" vs "three quarters" style differences count as errors for every run):
+
+| Run | Time | VRAM | WER | S/D/I | Ends | Commas | lowercase i |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| small | 3.5 s | 0.9 GB | 5.4% | 16/10/6 | 66 | 52 | 0 |
+| small + prompt | 3.6 s | 0.9 GB | 5.5% | 16/10/7 | 65 | 54 | 0 |
+| large-v3 | 11.0 s | 4.1 GB | 4.0% | 13/2/9 | 65 | 35 | 0 |
+| large-v3 + prompt | 11.1 s | 4.1 GB | 4.0% | 13/2/9 | 64 | 36 | 0 |
+| large-v3-turbo | 4.3 s | 2.3 GB | 3.9% | 13/4/6 | 45 | 20 | 6 |
+
+All runs: matched-word timing agrees with the references (0–5 words off per run, only in the prompt runs).
+
+### Recommendation: default model large-v3 with the prompt
+- **Words (priority 1):**
+  - **large-v3 + prompt** is best on the manual reference (3.8%) and gets every checked spot right.
+  - It is best or tied on the other two clips, with the fewest substitutions (3 on movie, 8 on conversation).
+  - It is the only run with no casualties among the known spots.
+- **Punctuation (priority 2):** large-v3 punctuates the movie and numbers clips well (48–65 ends), but only weakly in the casual conversation (18 ends vs 40 for small). The prompt doubles that from 10 and halves lowercase "i" (now fixed by processing anyway). Unpunctuated stretches still split acceptably (pause, joining word, max length).
+- **Prompt:** keep `INITIAL_PROMPT` **on for large-v3** (small gains everywhere, no losses seen) but **never with small** (it deletes speech).
+- **Cost:**
+  - **Time:** about 3 s per minute of audio on this GPU (20-minute video ≈ 1 minute).
+  - **VRAM:** 4.1 GB of 8 GB.
+  - **Download:** about 3 GB, once.
+  - **Risk:** if CUDA fails, the CPU fallback with large-v3 would be very slow (not measured; likely slower than real time).
+  - **Option to decide:** fall back to `small` on CPU. It is a different layer-1 key, so it is cached separately.
+- **Alternative:** `large-v3-turbo` if speed matters more. Its word accuracy is close (4.9 / 18.3 / 3.9%), it takes 2.5× less time and 2.3 GB, but it has the least punctuation and missed "goody two-shoes" and "mouth shut".
+- **Not recommended:**
+  - `small + prompt`: drops speech.
+  - `small` alone: it remains the most-punctuated, fastest option, but makes the most word errors.
+
+### Files changed
+- **Code:**
+  - `config.py`: `VAD_FILTER = False`, comments, `PROCESSING_VERSION = 3`
+  - `ai/transcript_processor.py`: lowercase-i rule, year reading 1000–2099
+- **Tests:**
+  - `tests/test_transcript_processor.py` and `tests/test_transcriber.py`: VAD-off fixtures, exact expected exclusions per real clip, filler/expression and silence regressions moved to the new fixtures, "1030"/"1066"/"1,030", lowercase-i test
+  - `tests/tools/evaluate_fixtures.py` (new)
+- **Data:**
+  - `tests/reference/{conversation,numbers,movie}.json` (new)
+  - fixtures regenerated and moved
+- **Docs:** `README.md`, `docs/PLAN.md`, `docs/PROGRESS.md`
+- **Local only:** `tests/media/silence.wav` (git-ignored).
+
+### Tests run (real results)
+- **pytest:** 128 passed.
+- **Evaluation:** `python tests/tools/evaluate_fixtures.py` ran on all 27 fixtures; the tables above come from its output.
+- **GPU:** 17 transcription runs (5 defaults + 12 experiment C), all cuda/float16, with VRAM measured from nvidia-smi.
+
+### Open (needs your decision)
+- **Default model and prompt:** recommendation above.
+- **Playback start for stretched first words** (Phase 7 proposal above).
+- **CPU fallback model** if large-v3 is chosen.
+- **Listen to the movie at 0:38–1:10** to confirm the 4 unverified sentences.

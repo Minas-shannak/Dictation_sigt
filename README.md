@@ -72,7 +72,10 @@ Run the tests with `pytest`.
 - `config.py`: settings for speech recognition, audio extraction and transcript processing, with defaults
 - `ai/transcriber.py`: faster-whisper speech recognition (GPU with CPU fallback); `ai/cli.py` runs it from the command line
 - `ai/transcript_processor.py`: hallucination filter, word cleanup, numbers to words, sentence segmentation
-- `tests/fixtures/`: real transcriber output for three clips, used by the tests (the clips themselves stay in the git-ignored `tests/media/`)
+- `tests/fixtures/`: real transcriber output for the test clips with the default settings, used by the tests;
+  `tests/fixtures/experiments/` holds other models and settings (the clips themselves stay in the git-ignored `tests/media/`)
+- `tests/reference/`: YouTube captions for the test clips, used only as a test reference (the app never reads captions);
+  `python tests/tools/evaluate_fixtures.py` compares every fixture against them
 - `services/audio_extractor.py`: checks media with ffprobe and extracts 16 kHz mono audio with FFmpeg
 - `tests/`: pytest tests (run `pytest`)
 - `docs/`: the plan for the audio-based pipeline and the progress log
