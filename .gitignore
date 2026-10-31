@@ -18,3 +18,6 @@ backup/
 *.m4a
 *.opus
 *.flac
+
+# Real test clips (local only; their transcripts are committed as tests/fixtures/*.json)
+tests/media/

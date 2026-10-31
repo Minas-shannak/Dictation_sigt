@@ -30,6 +30,7 @@ transcription. To force the CPU, run with `DICTATION_DEVICE=cpu`.
 
 ```bash
 python -m ai.cli some-video.mp4 --words     # --language auto, --model base, --twice
+python -m ai.cli tests/fixtures/numbers.json  # reprocess a saved raw result, no transcription
 ```
 
 The Whisper model (`small` by default, set with `DICTATION_WHISPER_MODEL`) is downloaded
@@ -52,8 +53,10 @@ Run the tests with `pytest`.
 - `static/style.css`: all styles, including the light and dark themes
 - `static/app.js`: all frontend code (player, typing, sounds, stats, saved progress)
 - `static/sounds/`: typing sounds (`key.mp3`, `error.mp3`, `hint.wav`)
-- `config.py`: settings for speech recognition and audio extraction, with defaults
+- `config.py`: settings for speech recognition, audio extraction and transcript processing, with defaults
 - `ai/transcriber.py`: faster-whisper speech recognition (GPU with CPU fallback); `ai/cli.py` runs it from the command line
+- `ai/transcript_processor.py`: hallucination filter, word cleanup, numbers to words, sentence segmentation
+- `tests/fixtures/`: real transcriber output for three clips, used by the tests (the clips themselves stay in the git-ignored `tests/media/`)
 - `services/audio_extractor.py`: checks media with ffprobe and extracts 16 kHz mono audio with FFmpeg
 - `tests/`: pytest tests (run `pytest`)
 - `docs/`: the plan for the audio-based pipeline and the progress log
