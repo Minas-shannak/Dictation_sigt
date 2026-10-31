@@ -21,3 +21,6 @@ backup/
 
 # Real test clips (local only; their transcripts are committed as tests/fixtures/*.json)
 tests/media/
+
+# Records that the one-time clean start ran (services/migration.py)
+data_version.json

@@ -49,7 +49,7 @@ python -m ai.cli some-video.mp4 --words     # --language auto, --twice
 python -m ai.cli tests/fixtures/numbers.json  # reprocess a saved raw result, no transcription
 ```
 
-The app uses one Whisper model, `large-v3-turbo`, with a short punctuated prompt (`config.py`). It is
+The app uses one Whisper model, `large-v3-turbo` (`config.py`). It is
 downloaded once (about 1.6 GB) on first use into `~/.cache/huggingface` and needs about 2.3 GB of GPU
 memory. Without a working GPU the same model runs on the CPU, which is much slower.
 
@@ -102,8 +102,13 @@ After editing `style.css` or `app.js`, bump the version in its link in `index.ht
   music or silence ("Thank you.", subtitle credits, the prompt) is left out. The result is cached, so
   a video is only transcribed once. The small box next to the link is the spoken language (`en`
   by default; empty = detect it).
-- Each sentence gets a clarity score (how sure Whisper is of its words); sentences below 0.7 are
-  marked unclear (`SENTENCE_CLARITY_MIN` in `config.py`).
+- Each sentence gets a clarity score (how sure Whisper is of its words). Below 0.8
+  (`SENTENCE_CLARITY_MIN` in `config.py`) it shows an **unclear audio** badge: the audio may be hard to
+  hear, or Whisper may have misheard it, so the exercise may be wrong. Skip it with **Next** if you like:
+  only completed sentences count in the statistics, so skipping never affects them.
+- Each sentence plays from 0.1 s before its first word to 0.25 s after its last one
+  (`PAD_BEFORE_SECONDS` / `PAD_AFTER_SECONDS`), but never into the neighbouring sentences. If Whisper
+  stretched a sentence's first word back over music, playback starts closer to the actual words.
 - Letters and digits are hidden as dots. Type the letters and digits of each word, then press
   **Space** to finish the word (the last word of a line needs no space). Punctuation is filled in
   for you, so for "story, of" you type `story`, then Space, then `of`. Case and accents don't matter.
@@ -122,6 +127,45 @@ After editing `style.css` or `app.js`, bump the version in its link in `index.ht
   video to H.264 in the background and replaces the stored file; the audio is transcribed either way.
 - An uploaded video not opened for 30 days is deleted to save space (its transcript is kept). Recent videos
   then shows "file expired, upload it again".
+
+## The switch to audio transcription (one-time clean start)
+
+The first version made its exercises from YouTube captions. The audio-based sentences are
+different, so the old saved data can't be reused. On the first start of this version:
+
+- the server copies the old caption cache (`cache/<videoId>.json`) into
+  `backup/pre-audio-pipeline-<date-time>/cache/` (with SHA-256 checksums in `manifest.json`), checks
+  the copies, and only then removes the originals; the terminal log lists the files;
+- on your first visit, the page sends its saved progress, stats, missed words, recent videos and
+  offsets to the same backup folder (`localStorage-<date-time>.json`), also downloads a copy
+  (`dictation-old-progress-backup.json`), and only then clears them, with a one-line notice. Sound
+  and theme settings are kept.
+
+It happens once (`data_version.json` records it). Progress is now tied to each transcript's version:
+if a video's transcript is ever regenerated with different sentences, only your position in it is
+reset (with a notice); its statistics are kept.
+
+### Restoring the old data
+
+To go back to the caption-based version with your old data:
+
+1. Stop the app and put the cache files back: `cp backup/pre-audio-pipeline-*/cache/*.json cache/`
+   (or, before switching versions, `python -m services.migration --restore backup/pre-audio-pipeline-<date-time>`,
+   which also checks the checksums).
+2. Switch to the caption-based version: `git switch --detach cd42f31`, install its requirements
+   (`uv pip install --python .venv/bin/python -r requirements-dev.txt` covers them) and run `python app.py`.
+3. Open http://localhost:8000, press F12, open the Console, and paste (with your backup file's
+   contents in place of `BACKUP`):
+
+   ```js
+   const backup = BACKUP;  // the contents of localStorage-<date-time>.json or dictation-old-progress-backup.json
+   for (const [key, value] of Object.entries(backup.items)) localStorage.setItem(key, value);
+   ```
+
+   Reload the page. (In this version, the same file can also be fetched with
+   `fetch("/api/migration/browser-backup/localStorage-<date-time>.json")`.)
+
+Back on this version (`git switch main`), the clean start does not run again.
 
 ## Keyboard shortcuts
 

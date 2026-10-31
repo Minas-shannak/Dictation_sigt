@@ -15,7 +15,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 
 import config
 from ai.transcriber import current_device
-from services import uploads
+from services import migration, uploads
 from services.audio_extractor import convert_for_browser, extracted_audio, remove_stale_temp_files
 from services.jobs import Job, JobManager
 from services.transcript_cache import Source, get_transcript, youtube_source
@@ -33,6 +33,40 @@ jobs = JobManager()
 @app.get("/")
 def index():
     return send_from_directory(BASE_DIR, "index.html")
+
+
+@app.get("/api/config")
+def api_config():
+    """Playback settings the page needs (all tunable values live in config.py)."""
+    return jsonify({"pad_before": config.PAD_BEFORE_SECONDS, "pad_after": config.PAD_AFTER_SECONDS,
+                    "data_format_version": config.DATA_FORMAT_VERSION})
+
+
+# --- One-time clean start (services/migration.py) ------------------------------------------
+
+@app.get("/api/migration")
+def api_migration():
+    return jsonify(migration.plan())
+
+
+@app.post("/api/migration/browser-backup")
+def api_browser_backup():
+    """The page sends its old localStorage data here before clearing it."""
+    body = request.get_json(silent=True) or {}
+    try:
+        path = migration.save_browser_backup(body.get("items"), str(body.get("origin", "")))
+    except (ValueError, TypeError):
+        return _error("bad_backup", "The backup data was not in the expected format.", 400)
+    return jsonify({"path": path})
+
+
+@app.get("/api/migration/browser-backup/<name>")
+def api_get_browser_backup(name):
+    """A saved localStorage backup, for restoring it (see README)."""
+    path = migration.browser_backup_path(name)
+    if path is None:
+        return _error("not_found", "No such backup file.", 404)
+    return send_file(path, mimetype="application/json")
 
 
 # --- Videos and jobs -------------------------------------------------------------------
@@ -191,6 +225,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     for noisy in ("httpx", "httpx2", "huggingface_hub", "werkzeug"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    migration.run()  # once: back up and clear the caption-based version's cache
     uploads.cleanup(startup=True)
     remove_stale_temp_files()
     threading.Thread(target=_retention_loop, name="upload-retention", daemon=True).start()

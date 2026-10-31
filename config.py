@@ -176,5 +176,19 @@ ALLOWED_CONTAINERS = {"mov,mp4,m4a,3gp,3g2,mj2", "matroska,webm"}
 UPLOAD_RETENTION_DAYS = 30                          # delete a video not opened for this long (transcripts stay)
 RETENTION_CHECK_SECONDS = 24 * 60 * 60              # cleanup at startup, then once a day
 
+# --- Clean start for the audio pipeline (services/migration.py) -------------
+# The old caption-based data is backed up into BACKUP_DIR and cleared once; the data
+# format version in DATA_VERSION_FILE records that it happened.
+DATA_FORMAT_VERSION = 2
+DATA_VERSION_FILE = BASE_DIR / "data_version.json"
+BACKUP_DIR = BASE_DIR / "backup"
+
+# --- Playback (sent to the page) ------------------------------------------------
+# Whisper's word timestamps are estimates, so each sentence plays a little before its
+# first word and after its last one; clamped so it never plays into a neighbouring
+# sentence. The per-video timing offset is applied on top.
+PAD_BEFORE_SECONDS = 0.1
+PAD_AFTER_SECONDS = 0.25
+
 # --- Background jobs (services/jobs.py) ---------------------------------------
 FINISHED_JOBS_KEPT = 50                             # finished jobs stay queryable until this many newer ones finish

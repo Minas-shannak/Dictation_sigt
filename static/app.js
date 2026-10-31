@@ -14,8 +14,8 @@ const SHORTCUTS = {
 const MAX_WRONG_ATTEMPTS = 3;  // wrong keys on one letter before it's revealed automatically
 const SLOW_RATE = 0.75;
 const PLAY = {
-  leadIn: 0.2,        // start playing this many seconds before the line
-  tail: 0.15,         // and stop this many seconds after it
+  padBefore: 0.1,     // seconds before the first word and after the last one;
+  padAfter: 0.25,     // replaced by the server's values (config.py) at startup
   offsetMin: -0.5,
   offsetMax: 0.5,
   offsetStep: 0.1,
@@ -27,6 +27,7 @@ const TYPING = {
   wrongSpaceMark: "␣",    // how a wrongly typed space appears in the word box
 };
 const STORE_PREFIX = "dictation:";
+const DATA_FORMAT_VERSION = 2;  // the audio-based version; older saved data is backed up and cleared once
 
 // ---- Text normalization ----------------------------------------------------------
 const PLAIN_ASCII = {
@@ -123,20 +124,30 @@ async function loadVideo(url, lang) {
   startLocalJob(body);
 }
 
-// data: { videoId, lines: [{start, duration, text}] }; makePlayer(container, events) -> player.
+// data: the unified transcript ({video_id, transcript_version, sentences: [{start, end,
+// play_start, text, unclear, ...}]}); makePlayer(container, events) -> player.
 function startPractice(data, lang, makePlayer, info = {}) {
   state.data = data;
-  state.rec = videoRecord(data.videoId);
+  state.rec = videoRecord(data.video_id);
+  // Saved progress belongs to one version of the transcript. If it was regenerated (other
+  // sentences), only the position is reset; the statistics are kept.
+  if (state.rec.transcriptVersion && state.rec.transcriptVersion !== data.transcript_version) {
+    state.rec.archivedStats = (state.rec.archivedStats || []).concat(Object.values(state.rec.stats || {}));
+    state.rec.stats = {};
+    state.rec.lineIndex = 0;
+    showNotice("The transcript of this video was regenerated, so your position was reset. Your statistics were kept.");
+  }
+  state.rec.transcriptVersion = data.transcript_version;
   if (info.title) state.rec.title = info.title;
-  state.rec.lineCount = data.lines.length;
+  state.rec.lineCount = data.sentences.length;
   state.rec.lang = lang;
   state.rec.lastOpened = Date.now();
   saveVideoRecord(state.rec);
-  state.index = Math.min(state.rec.lineIndex, data.lines.length - 1);
+  state.index = Math.min(state.rec.lineIndex, data.sentences.length - 1);
 
   $("loadScreen").classList.add("hidden");
   $("practiceScreen").classList.remove("hidden");
-  $("videoTitle").textContent = state.rec.title || data.videoId;
+  $("videoTitle").textContent = state.rec.title || data.video_id;
   $("asrInfo").textContent = info.asr || "";
   renderOffset();
   renderStats(null);
@@ -169,7 +180,59 @@ function renderRecent() {
     list.appendChild(li);
   }
 }
-renderRecent();
+
+// ---- Notices ------------------------------------------------------------------------------
+function showNotice(text) {
+  $("noticeText").textContent = text;
+  $("notice").classList.remove("hidden");
+}
+$("noticeClose").addEventListener("click", () => $("notice").classList.add("hidden"));
+
+// ---- One-time clean start ---------------------------------------------------------------------
+// Progress saved by the caption-based version (records keyed by a bare YouTube ID) doesn't
+// match the audio transcripts. On the first visit it is sent to the server's backup folder,
+// downloaded as a file too, and only then removed. Sound and theme settings stay.
+async function migrateOldData() {
+  if (loadJSON("dataVersion", 0) >= DATA_FORMAT_VERSION) return;
+  const keys = [];
+  try { for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i)); } catch { return; }
+  const videoPrefix = STORE_PREFIX + "video:";
+  const old = keys.filter((k) => k.startsWith(videoPrefix) && !k.slice(videoPrefix.length).includes(":"));
+  if (!old.length) { saveJSON("dataVersion", DATA_FORMAT_VERSION); return; }
+  const items = {};
+  for (const k of keys) if (k.startsWith(STORE_PREFIX)) items[k] = localStorage.getItem(k);
+  let path;
+  try {
+    const res = await fetch("/api/migration/browser-backup", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, origin: location.origin }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    path = (await res.json()).path;
+  } catch {
+    showNotice("Your old progress could not be backed up, so it was left as it is. Make sure `python app.py` is running, then reload.");
+    return;
+  }
+  const blob = new Blob([JSON.stringify({ origin: location.origin, saved_at: new Date().toISOString(), items }, null, 1)],
+                        { type: "application/json" });
+  const link = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(blob), download: "dictation-old-progress-backup.json",
+  });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  for (const k of old) localStorage.removeItem(k);
+  saveJSON("dataVersion", DATA_FORMAT_VERSION);
+  showNotice(`Transcripts now come from the audio, so your old caption-based progress (${old.length} ` +
+    `video${old.length === 1 ? "" : "s"}) was backed up to ${path} (and downloaded) and cleared. ` +
+    "Your sound and theme settings were kept.");
+}
+
+fetch("/api/config").then((r) => r.json()).then((c) => {
+  PLAY.padBefore = c.pad_before;
+  PLAY.padAfter = c.pad_after;
+}).catch(() => {});
+migrateOldData().finally(renderRecent);
 
 $("backBtn").addEventListener("click", () => {
   stopWatching();
@@ -336,14 +399,10 @@ function maybeStartLocal() {
       : "Transcript ready. Convert the video to practice with it.");
     return;
   }
-  const data = {
-    videoId: t.video_id, lang: t.language, source: "audio",
-    lines: t.sentences.map((st) => ({ id: st.index, start: st.start, duration: st.end - st.start, text: st.text })),
-  };
   const asr = `${t.model} · ${t.device === "cpu" ? "CPU" : "GPU"} ${t.compute_type}`;
   const youtubeId = local.video.youtube_id;
   $("processing").classList.add("hidden");
-  startPractice(data, $("langInput").value.trim(),
+  startPractice(t, $("langInput").value.trim(),
     youtubeId ? (box, events) => makeYouTubePlayer(box, youtubeId, events)
               : (box, events) => makeHtml5Player(box, `/media/${encodeURIComponent(t.video_id)}`, events),
     { title: local.video.original_filename, asr });
@@ -411,6 +470,10 @@ async function makeYouTubePlayer(container, videoId, events) {
     101: "The owner doesn't allow this video to be embedded, so it can't be played here.\nTry another video.",
     150: "The owner doesn't allow this video to be embedded, so it can't be played here.\nTry another video.",
   };
+  // A pause requested while YouTube is still buffering after a seek only takes effect when
+  // the buffering ends (up to ~0.6 s later). Remember the request so the player reports
+  // "paused" right away (icon, Enter) and pauses again if YouTube starts playing anyway.
+  let pauseRequested = false;
   yt = new YT.Player(container, {
     videoId,
     playerVars: {
@@ -420,19 +483,22 @@ async function makeYouTubePlayer(container, videoId, events) {
     events: {
       onReady: () => { hideCaptions(); events.onReady(yt.getVideoData().title); },
       onStateChange: (e) => {
-        if (e.data === YT.PlayerState.PLAYING) hideCaptions();
-        events.onPlayingChange(playing(e.data), e.data === YT.PlayerState.PLAYING);
+        if (e.data === YT.PlayerState.PLAYING) {
+          hideCaptions();
+          if (pauseRequested) { yt.pauseVideo(); return; }
+        }
+        events.onPlayingChange(playing(e.data) && !pauseRequested, e.data === YT.PlayerState.PLAYING);
       },
       onError: (e) => events.onError(messages[e.data] || `Player error ${e.data}.`),
     },
   });
   return {
-    play: () => yt.playVideo(),
-    pause: () => yt.pauseVideo(),
+    play: () => { pauseRequested = false; yt.playVideo(); },
+    pause: () => { pauseRequested = true; yt.pauseVideo(); events.onPlayingChange(false, false); },
     seekTo: (t) => yt.seekTo(t, true),
     getCurrentTime: () => yt.getCurrentTime(),
     getDuration: () => yt.getDuration(),
-    isPlaying: () => playing(yt.getPlayerState()),
+    isPlaying: () => !pauseRequested && playing(yt.getPlayerState()),
     setRate: (r) => yt.setPlaybackRate(r),
     destroy: () => yt.destroy(),
   };
@@ -500,10 +566,20 @@ function stopPlaybackClock() {
   state.playingSince = null;
 }
 
+// The part of the video a sentence plays: padded a little (word timestamps are estimates),
+// but never into the previous sentence's last word or the next one's first word. It starts
+// at play_start, which is later than start when Whisper stretched the first word over the
+// music before it. The per-video offset applies on top.
 function lineWindow(i) {
-  const line = state.data.lines[i];
+  const list = state.data.sentences;
+  const s = list[i], prev = list[i - 1], next = list[i + 1];
+  let from = (s.play_start ?? s.start) - PLAY.padBefore;
+  let to = s.end + PLAY.padAfter;
+  if (prev) from = Math.max(from, prev.end);
+  if (next) to = Math.min(to, next.start);
+  to = Math.max(to, s.end);  // overlapping timestamps: never cut this sentence's own last word
   const offset = state.rec.offset || 0;
-  return { from: Math.max(0, line.start + offset - PLAY.leadIn), to: line.start + line.duration + offset + PLAY.tail };
+  return { from: Math.max(0, from + offset), to: to + offset };
 }
 
 function playLine(i, rate = 1) {
@@ -568,7 +644,8 @@ function showLine(i) {
   state.lineFinished = false;
   state.rec.lineIndex = i;
   saveVideoRecord(state.rec);
-  state.slots = buildSlots(state.data.lines[i].text);
+  state.slots = buildSlots(state.data.sentences[i].text);
+  $("unclearBadge").classList.toggle("hidden", !state.data.sentences[i].unclear);
   state.cursor = nextCursor();
   state.completing = false;
   state.wrongAt = -1;
@@ -581,9 +658,11 @@ function showLine(i) {
   if (state.cursor < 0) completeLine();  // nothing typeable on this line
 }
 
+// Previous / Next. Stats are only recorded when a sentence is completed, so a sentence
+// skipped with Next (for example one marked "unclear audio") never counts in WPM/accuracy.
 function goToLine(i) {
   if (!state.data) return;
-  i = Math.max(0, Math.min(state.data.lines.length - 1, i));
+  i = Math.max(0, Math.min(state.data.sentences.length - 1, i));
   showLine(i);
   playLine(i);
 }
@@ -763,10 +842,12 @@ function recordLineStats() {
 }
 
 // Averages over completed lines, weighted by length.
+// Statistics kept from an earlier version of the transcript (archivedStats) still count.
 function videoAverages(rec) {
   let chars = 0, ms = 0, correct = 0, keys = 0;
-  for (const s of Object.values(rec.stats || {})) { chars += s.chars; ms += s.ms; correct += s.correct; keys += s.keys; }
-  return { wpm: wpm(chars, ms), acc: pct(correct, keys), lines: Object.keys(rec.stats || {}).length };
+  const all = Object.values(rec.stats || {}).concat(rec.archivedStats || []);
+  for (const s of all) { chars += s.chars; ms += s.ms; correct += s.correct; keys += s.keys; }
+  return { wpm: wpm(chars, ms), acc: pct(correct, keys), lines: all.length };
 }
 
 function renderStats(lineEntry) {
@@ -778,7 +859,7 @@ function renderStats(lineEntry) {
 
 // "N/M" is the current line; the bar fills with finished lines.
 function renderProgress() {
-  const total = state.data.lines.length;
+  const total = state.data.sentences.length;
   $("progressCount").textContent = `${state.index + 1}/${total}`;
   const done = Object.keys(state.rec.stats).filter((k) => Number(k) < total).length;
   $("progressFill").style.width = `${(100 * done) / total}%`;
@@ -821,7 +902,7 @@ function completeLine() {
   const token = state.lineToken;
   setTimeout(() => {
     if (state.lineToken !== token) return;  // I already moved elsewhere
-    if (state.index + 1 < state.data.lines.length) goToLine(state.index + 1);
+    if (state.index + 1 < state.data.sentences.length) goToLine(state.index + 1);
   }, TYPING.completePauseMs);
 }
 

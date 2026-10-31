@@ -13,7 +13,7 @@ Update this file at the end of every phase. Commit after every phase.
 | 4. Unified format and caching | Done |
 | 5. Background jobs and local upload | Done, approved |
 | 6. Replace the YouTube caption pipeline | Done, approved |
-| 7. Integrate with the dictation engine | **In progress** (see below) |
+| 7. Integrate with the dictation engine | Done, **waiting for review** (manual checklist below) |
 | 8. Test and fix regressions | Not started |
 
 ## Phase 1: Inspection (Oct 31, 2026)
@@ -863,3 +863,116 @@ Sentences marked unclear at each threshold:
    - a section 15 browser regression on YouTube and uploaded videos
    - the manual test checklist
    - README restore instructions
+
+## Phase 7: integration with the dictation engine, completed (Nov 1, 2026)
+
+### Migration (clean start, PLAN.md section 13)
+- **Server: `services/migration.py`** runs once at startup (`data_version.json`, `DATA_FORMAT_VERSION = 2`).
+  - **What it touches:** it finds old-format caption files only (`cache/<id>.json` with `videoId` + `lines` and no `cache_format`). New `cache/asr/` and `cache/transcripts/` entries and unrelated files are never touched.
+  - **Backup:** it copies them to `backup/pre-audio-pipeline-<date-time>/cache/`, **verifies each copy's SHA-256**, and writes `manifest.json` and a `README.txt`.
+  - **Clearing:** only then does it delete the originals. If any copy mismatches, nothing is deleted and it retries at the next start.
+  - **CLI:** `python -m services.migration --dry-run` and `--restore DIR`, which checks checksums.
+  - **Routes:**
+    - `GET /api/migration`: the plan or the state
+    - `POST /api/migration/browser-backup`: stores the page's copy
+    - `GET /api/migration/browser-backup/<name>`: for restoring
+    - `GET /api/config`: padding values
+- **Browser, on first visit:**
+  - **Scope:** if old bare-ID records (`dictation:video:<11-char id>`) exist, it collects **all** `dictation:*` keys.
+  - **Backup:** it POSTs them to the backup folder; only after the server confirms does it download `dictation-old-progress-backup.json`.
+  - **Clearing:** it removes the old records (progress, stats, missed words, recent videos, offsets) and sets `dictation:dataVersion = 2`.
+  - **Kept:** sound and theme settings, and any new `yt:` / `local:` records.
+  - **Notice:** a one-line notice is shown. If the backup POST fails, **nothing is cleared**.
+
+**Dry run on a COPY of the real data** (scratch folder; the real data was never modified):
+- **Real data found (read-only):**
+  - `cache/`: the 7 old caption files
+  - **Firefox:** your real profile `lv6td6v4.default` (Chrome is not installed). Its localStorage for `localhost:8000` was copied and decoded with sqlite plus a small pure-Python snappy decoder (scratchpad tool `firefox_ls_export.py`). It contains:
+    - `dictation:video:H-_Wx7VETxE`: "Frozen – Meeting Olaf Clip (HD)", line 33/33, stats for 32 lines, 97 missed words
+    - `dictation:video:cpbARmnt_nU`: the Rise of the Guardians clip, line 103/103, stats for 103 lines, 106 missed words, offset −0.5
+    - `dictation:sound`: volume 6, not muted
+  - **Also found:** the real `cache/` now also has `asr/` and `transcripts/` folders from today 00:23–00:34 (`JLsz5vV3Q08`, `Vv9KJYUnVvA`), apparently from you using the Phase 6 version. They are new-format and are kept.
+- **Dry-run plan:** back up and remove 7 files (`H-_Wx7VETxE` 4063 B, `JLsz5vV3Q08` 3229 B, `arj7oStGLkU` 31548 B, `cpbARmnt_nU` 10209 B, `haXeyBHW2l0` 4390 B, `jNQXAC9IVRw` 649 B, `yIGhoZDFYBA` 9642 B), with checksums listed.
+- **Startup migration on the copy:** the 7 files went into `backup/pre-audio-pipeline-…/cache/` with the manifest and README, then were removed from the copied `cache/`.
+- **First page visit** (fresh headless Firefox profile, your real localStorage loaded onto the origin first):
+  - notice: "Transcripts now come from the audio, so your old caption-based progress (2 videos) was backed up to backup/…/localStorage-….json (and downloaded) and cleared. Your sound and theme settings were kept."
+  - afterwards, localStorage held only `dictation:sound` (volume 6) and `dictation:dataVersion`; Recent videos was empty
+  - a second visit did nothing
+- **Restore verified:**
+  - the server copy and the downloaded copy of localStorage are **identical** to your original export
+  - the documented console restore brought back exactly the original items
+  - `restore_cache` brought back all 7 cache files **byte-identical** to the real ones
+- **Wired** to run once on real startup (`python app.py`) and on the first page visit. **It has not run on your real data**: there is no `backup/` or `data_version.json` in the project. It runs the next time you start the app.
+- **README:** "The switch to audio transcription" and "Restoring the old data" (cp or `--restore`, `git switch --detach cd42f31`, console snippet).
+
+### Engine integration
+- **Data:** the page uses the unified transcript directly (`sentences` with `start`, `end`, `play_start`, `clarity`, `unclear`). The `lines` adapter is gone.
+- **Playback window:**
+  - **Start:** `play_start − 0.1 s`, but never before the previous sentence's end.
+  - **End:** `end + 0.25 s`, but never past the next sentence's start, and never before this sentence's own end.
+  - **Offset:** applied on top.
+  - **Settings:** `PAD_BEFORE_SECONDS` / `PAD_AFTER_SECONDS` in config.py, sent to the page by `/api/config`.
+- **`play_start`** is used for stretched first words.
+- **"unclear audio" badge** above the sentence when `unclear` (clarity < 0.8). Skipping with Next records nothing, because stats are only recorded on completion (now commented and tested).
+- **Progress tied to `transcript_version`:**
+  - **On a mismatch:** the position goes to 0, the old per-sentence stats move to `archivedStats` (still counted in the video average, with missed words kept), and a notice says the transcript was regenerated.
+- **YouTube pause fix** (found by the regression):
+  - **Problem:** a pause requested while YouTube was buffering after a seek only took effect up to ~0.6 s later, so the icon and a quick second Enter acted on the old state.
+  - **Fix:** the adapter now remembers the request, reports "paused" immediately, and pauses again if YouTube starts playing anyway.
+
+### Tests run (real results)
+- **pytest: 217 passed.** That is 206 + 11 new migration tests:
+  - dry run changes nothing
+  - backup, verify, then clear, once
+  - new-format and unrelated files kept
+  - fresh install
+  - a mismatching copy means nothing is deleted
+  - browser backup next to the cache backup, or in a new folder
+  - bad data rejected
+  - byte-for-byte restore
+  - routes
+- **Section 15 regression in headless Firefox: 66 of 68 checks passed, 0 console errors.** Run on **YouTube** ("Me at the zoo", 4 sentences) and an **uploaded video** (4-minute conversation MP4, 70 sentences). Passed on both:
+  - **Dictation:** sentence window = play_start−0.1 … end+0.25 clamped to the next sentence; plays once and pauses at its end; doesn't move on by itself; video time shown.
+  - **Typing:** correct key advances (key sound); wrong key shows red (error sound); Backspace deletes a correct letter; spaces are required.
+  - **Hints:** Ctrl+H reveals a purple letter (hint sound, rgb(124,58,237)); 3 wrong keys auto-reveal.
+  - **Colors:** done words teal (rgb(13,148,136)).
+  - **Completion and stats:** completing moves on and plays the next sentence; line stats and video average shown; missed words recorded; progress bar fills.
+  - **Controls:** Replay; Play/Pause and Enter, each taking effect within 0.05 s; Next; Previous; the Hint button.
+  - **Skipping:** a sentence skipped with Next adds no stats.
+  - **Settings:** offset +0.1 shifts the window; Ctrl+M mutes; the volume slider sets and saves the volume.
+  - **Saved data:** Recent videos lists both after a reload; reopening restores the saved position (index 2 and 64).
+  - **Regenerated transcript:** position reset, stats kept (archived and still in the video average), notice shown.
+  - **Clarity:** "unclear audio" badge on an unclear sentence ("Well..." clarity 0.794), with skip → no stats change; hidden on clear ones.
+  - **Not passed (2):** **Fullscreen** was refused by headless Firefox, which needs a real display and user gesture. It is on the manual checklist.
+- **Syntax:** Python 3.10 parse OK; `node --check` OK.
+
+### Manual test checklist (things only a human can judge)
+1. **First start:** run `python app.py`.
+   - The log says the old caption cache (7 files) was backed up to `backup/pre-audio-pipeline-…`.
+   - Open http://localhost:8000 in Firefox: a notice, a downloaded `dictation-old-progress-backup.json`, the two old videos gone from Recent videos, volume still 6.
+   - Glance at the backup folder.
+2. **Sentence boundaries:** on a movie clip (e.g. the Rise of the Guardians clip) and a YouTube talk, play about 10 sentences each. Each should start at the sentence's beginning and end after its last word, with no words from the neighbouring sentences.
+3. **Last word not cut:** listen especially to sentence endings followed immediately by the next sentence. Report the video and time if a word is clipped (padding can be tuned in `config.py`).
+4. **Stretched first words:** sentences after music shouldn't begin with seconds of music before the words.
+5. **Colors** in both light and dark theme: teal finished words, orange current word, purple hinted letters, a wrong key red in the word box.
+6. **Hints:** Ctrl+H reveals one letter, twice in a row the rest of the word; 3 wrong keys on one letter reveal it.
+7. **Sounds:** key, error and hint sounds are audible and pleasant at your volume. Ctrl+M mutes and unmutes (icon changes). The volume slider changes loudness and is remembered after a reload.
+8. **Fullscreen:** on YouTube and on an uploaded video, the whole app goes fullscreen, typing still works, and Esc exits.
+9. **Timing offset:** −/+ shifts when sentences start and stop, and the value is remembered for that video after a reload.
+10. **Previous / Replay / Next / Play-Pause buttons**, and Enter, Tab, Shift+Tab (slow), Ctrl+←/→: each does what it says. Pressing Enter right after Replay pauses immediately.
+11. **"unclear audio" badge:** does it appear on lines that really are hard to hear or misheard, and not on clear ones? Skipping one with Next leaves "Video average" unchanged.
+12. **Saved progress:** do a few sentences, reload the page, and reopen the video from Recent videos. You should be at the same sentence with stats and missed words kept.
+13. **Upload a video of your own** (e.g. an MP4 from your phone). It processes, plays and behaves like a YouTube video. If it's HEVC/MOV, Convert works.
+14. **Recent videos:** YouTube and uploaded entries show titles and filenames, and reopen instantly from the cache.
+15. **Typing feel:** Backspace across words, auto-filled punctuation, required spaces, accents and curly quotes not counted as mistakes.
+
+### Files changed
+- New: `services/migration.py`, `tests/test_migration.py`.
+- Changed:
+  - code: `app.py`, `config.py` (migration paths, `DATA_FORMAT_VERSION`, padding), `ai/transcript_processor.py` (`play_start`, in part 1)
+  - frontend: `static/app.js`, `static/style.css`, `index.html` (`app.js?v=6`, `style.css?v=3`)
+  - other: `.gitignore` (`data_version.json`), `README.md`, `docs/PROGRESS.md`
+
+### Not done / next (Phase 8)
+- The section 18 test list in full, especially playback-timing judgements on real listening (the checklist above) and the media tests not yet covered (speech over background music, fast speech on a full video).
+- The fullscreen check needs a real browser window.
