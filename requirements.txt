@@ -17,5 +17,11 @@ nvidia-cublas-cu12==12.9.3.13
 # YouTube audio (Phase 6). Breaks when YouTube changes; update with:
 #   uv pip install --python .venv/bin/python -U yt-dlp   (then update this pin)
 yt-dlp==2026.10.26
+# YouTube now requires solving a JavaScript challenge; without a JS runtime some
+# videos are "not available". Deno (a pip-packaged binary, .venv/bin/deno) runs
+# yt-dlp's challenge scripts (yt-dlp-ejs, the version yt-dlp itself pins).
+# Pass it explicitly: yt-dlp --js-runtimes deno:.venv/bin/deno ...
+deno==2.9.8
+yt-dlp-ejs==0.8.0
 
 num2words==0.5.14  # numbers to words in the training transcript (Phase 3)

@@ -26,6 +26,22 @@ If the GPU can't be used, the log says why and how to fix it (for example a miss
 `libcublas`), and transcription continues on the CPU. The device in use is logged with every
 transcription. To force the CPU, run with `DICTATION_DEVICE=cpu`.
 
+### YouTube audio (yt-dlp)
+
+YouTube requires a JavaScript challenge to be solved, so yt-dlp needs a JavaScript runtime:
+Deno is installed into the venv by `requirements.txt` (`.venv/bin/deno`, no system install).
+Without it, some videos fail with "This video is not available". Pass it explicitly:
+
+```bash
+.venv/bin/yt-dlp --js-runtimes deno:.venv/bin/deno -f bestaudio URL
+```
+
+yt-dlp breaks when YouTube changes. To update it (then update the pins in `requirements.txt`):
+
+```bash
+uv pip install --python .venv/bin/python -U yt-dlp yt-dlp-ejs
+```
+
 ### Transcribing a file from the command line
 
 ```bash

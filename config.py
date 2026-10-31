@@ -18,12 +18,19 @@ CPU_COMPUTE_TYPE = "int8"
 # Language passed to Whisper when the caller gives none; None = auto-detect.
 DEFAULT_LANGUAGE = "en"
 VAD_FILTER = True                    # skip silence before decoding (timestamps stay on the original timeline)
+# Speech probability above which the VAD keeps audio (faster-whisper's default: 0.5).
+# Lower keeps more speech that is mixed with music.
+VAD_THRESHOLD = 0.5
 CONDITION_ON_PREVIOUS_TEXT = False   # reduces repetition loops
 BEAM_SIZE = 5                        # faster-whisper's default
+# Text shown to Whisper as if it came before the audio; a well-punctuated prompt
+# nudges it towards punctuated output. Empty = no prompt. Part of the ASR settings
+# (changing it means retranscribing).
+INITIAL_PROMPT = ""
 
 # --- Transcript processing (ai/transcript_processor.py) ----------------------
 # Bump whenever processing logic changes in a way that changes the sentences.
-PROCESSING_VERSION = 1
+PROCESSING_VERSION = 2
 
 # Hallucination filter. A segment is excluded from the training transcript (but
 # kept in the raw result) if any rule matches. The defaults for the first two
@@ -68,6 +75,15 @@ NUMBERS_TO_WORDS = True
 SENTENCE_MAX_WORDS = 16          # longer sentences are split at a comma or the longest pause
 SENTENCE_MAX_SECONDS = 8.0
 SENTENCE_MIN_WORDS = 3           # shorter pieces merge into a neighbour, unless they are a complete sentence ("Yes.")
+# A one-word piece that is one of these stays its own sentence ("Okay,", "Well", "Perfect.").
+# Any other single word joins the nearest sentence if the gap to it is under
+# SINGLE_WORD_MERGE_SECONDS, and stays alone only if both gaps are longer.
+STANDALONE_EXPRESSIONS = {
+    "yes", "yeah", "yep", "no", "nope", "okay", "ok", "well", "oh", "wow", "hey", "hi", "hello", "bye",
+    "right", "perfect", "really", "sure", "exactly", "absolutely", "great", "cool", "thanks", "sorry",
+    "please", "whoa", "what", "why",
+}
+SINGLE_WORD_MERGE_SECONDS = 1.5
 SENTENCE_PAUSE_SECONDS = 0.7     # in stretches Whisper left unpunctuated, a pause this long ends a sentence
 # Words across a silence this long are never in one sentence. Not lower: Whisper
 # sometimes mistimes a word at a segment boundary by 1.5 s or more ("Hang ... on.").

@@ -246,8 +246,35 @@ def test_short_fragment_merges_into_the_closer_neighbour():
 
 
 def test_short_fragment_is_not_merged_across_a_long_silence():
-    tokens = timed("I really liked it.", 0.0) + timed("well", 5.0)
-    assert texts(process_transcript(raw_of(seg(tokens)))) == ["I really liked it.", "well"]
+    tokens = timed("I really liked it.", 0.0) + timed("so there", 5.0)
+    assert texts(process_transcript(raw_of(seg(tokens)))) == ["I really liked it.", "so there"]
+
+
+def test_single_standalone_expression_stays_its_own_sentence_even_unpunctuated():
+    # "Well" is 0.1 s after the previous sentence (close enough to merge) and 2.2 s before the next.
+    tokens = timed("I went home.", 0.0) + [(" Well", 1.0, 1.3)] + timed("it was late.", 3.5)
+    assert texts(process_transcript(raw_of(seg(tokens)))) == ["I went home.", "Well", "it was late."]
+    # The same position with a word that isn't an expression merges.
+    tokens = timed("I went home.", 0.0) + [(" fast", 1.0, 1.3)] + timed("it was late.", 3.5)
+    assert texts(process_transcript(raw_of(seg(tokens)))) == ["I went home. fast", "it was late."]
+
+
+def test_other_single_word_joins_the_nearest_sentence_within_the_limit():
+    # "Whereas." is a complete sentence but not an expression: it joins the closer neighbour.
+    tokens = timed("That is criminal.", 0.0) + [(" Whereas.", 2.2, 2.5)] + timed("Because you broke the rules.", 2.8)
+    assert texts(process_transcript(raw_of(seg(tokens)))) == ["That is criminal.", "Whereas. Because you broke the rules."]
+    # It can also join a finished sentence before it.
+    tokens = timed("We left at ten.", 0.0) + [(" Sharp.", 1.0, 1.3)] + timed("Then we drove home.", 3.5)
+    assert texts(process_transcript(raw_of(seg(tokens)))) == ["We left at ten. Sharp.", "Then we drove home."]
+
+
+def test_single_word_stays_alone_only_if_both_gaps_exceed_the_limit():
+    # Unpunctuated (sung) text: 1.7 s before "on", 2.1 s after.
+    tokens = timed("into the night", 0.0) + [(" on", 2.6, 3.1)] + timed("a savior so run", 5.2)
+    r = process_transcript(raw_of(seg(tokens)))
+    assert texts(r) == ["into the night", "on", "a savior so run"]
+    r = process_transcript(raw_of(seg(tokens)), {"single_word_merge_seconds": 2.5})
+    assert texts(r) == ["into the night on", "a savior so run"]
 
 
 def test_word_order_and_timestamps_are_preserved_across_segments():
@@ -330,7 +357,7 @@ def test_output_records_settings_versions_and_both_transcripts():
 
 # --- Real transcriber output (tests/fixtures) -------------------------------------
 
-@pytest.fixture(scope="module", params=["conversation", "music", "numbers"])
+@pytest.fixture(scope="module", params=["conversation", "music", "numbers", "movie"])
 def real(request):
     raw = json.loads((FIXTURES / f"{request.param}.json").read_text(encoding="utf-8"))["raw"]
     before = copy.deepcopy(raw)
@@ -374,3 +401,37 @@ def test_real_numbers_clip_reads_times_as_words():
     assert "ten thirty" in text and "twelve thirty" in text and "forty-five minutes" in text
     assert "one p.m., two p.m., three p.m., etc." in text
     assert re.findall(r"\S*\d\S*", text) == ["10-30.", "10-30."]  # the only ambiguous tokens, left as said
+
+
+def _fixture_raw(name):
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))["raw"]
+
+
+@pytest.mark.parametrize("name, fillers", [
+    ("movie_novad", [("Uh,", 100.16), ("uh,", 125.62)]),
+    ("conversation_turbo", [("um", 43.8), ("um", 116.9)]),
+])
+def test_real_fillers_are_removed_and_expressions_kept(name, fillers):
+    raw = _fixture_raw(name)
+    r = process_transcript(raw)
+    raw_words = [w for s in raw["segments"] for w in s["words"]]
+    used = {i for w in all_words(r) for i in w["source"]}
+    excluded = {e["segment"] for e in r["excluded"]}
+    found, k = [], 0
+    for si, s in enumerate(raw["segments"]):
+        for w in s["words"]:
+            p = re.sub(r"[^\w]", "", w["word"]).lower()
+            if p in ("um", "uh"):
+                found.append((w["word"].strip(), round(w["start"], 2)))
+                assert k not in used
+            elif p in config.PROTECTED_WORDS and si not in excluded:
+                assert k in used, f"expression {w['word']!r} at {w['start']} was removed"
+            k += 1
+    assert found == fillers
+
+
+def test_real_silence_hallucination_is_excluded():
+    # Whisper without VAD writes "You" for 20 s of silence.
+    r = process_transcript(_fixture_raw("silence_novad"))
+    assert [e["text"] for e in r["excluded"]] == ["You"]
+    assert r["sentences"] == [] and r["empty_reason"] == "all_excluded"

@@ -30,7 +30,8 @@ SETTING_NAMES = [
     "KNOWN_HALLUCINATIONS", "KNOWN_HALLUCINATION_MAX_AVG_LOGPROB", "KNOWN_HALLUCINATION_MIN_NO_SPEECH",
     "REMOVE_FILLERS", "FILLER_PATTERNS", "PROTECTED_WORDS", "NON_SPEECH_ANNOTATIONS",
     "NUMBERS_TO_WORDS",
-    "SENTENCE_MAX_WORDS", "SENTENCE_MAX_SECONDS", "SENTENCE_MIN_WORDS", "SENTENCE_PAUSE_SECONDS",
+    "SENTENCE_MAX_WORDS", "SENTENCE_MAX_SECONDS", "SENTENCE_MIN_WORDS", "STANDALONE_EXPRESSIONS",
+    "SINGLE_WORD_MERGE_SECONDS", "SENTENCE_PAUSE_SECONDS",
     "SENTENCE_LONG_SILENCE_SECONDS", "SENTENCE_SPLIT_PAUSE_SECONDS", "SENTENCE_SPLIT_BEFORE_WORDS",
     "TITLE_ABBREVIATIONS", "ABBREVIATIONS",
 ]
@@ -360,21 +361,29 @@ def _segment_run(run: List[Dict], s: Dict) -> List[List[Dict]]:
 
     pieces = [part for p in pieces for part in _split_long(p, s)]
 
-    # Merge fragments that are too short into the closer neighbour, but keep complete
-    # short sentences ("Yes.", "Wow!") and never merge across a long silence.
+    # Merge fragments that are too short into the closer neighbour.
+    # - One word: a standalone expression ("Okay,", "Well") stays alone; any other word
+    #   joins the nearest sentence within single_word_merge_seconds, even a finished one.
+    # - Two words or more (below the minimum): complete sentences ("Yes, yes.") stay;
+    #   others merge, but never across a long silence or after a finished sentence.
     i = 0
     while i < len(pieces):
         p = pieces[i]
-        if len(p) >= s["sentence_min_words"] or SENTENCE_END_RE.search(p[-1]["word"]) or len(pieces) == 1:
+        single = len(p) == 1
+        if single:
+            keep = _plain(p[0]["word"]) in s["standalone_expressions"]
+        else:
+            keep = len(p) >= s["sentence_min_words"] or SENTENCE_END_RE.search(p[-1]["word"])
+        if keep or len(pieces) == 1:
             i += 1
             continue
-        limit = s["sentence_long_silence_seconds"]
+        limit = s["single_word_merge_seconds"] if single else s["sentence_long_silence_seconds"]
         gap_before = _gap(pieces[i - 1][-1], p[0]) if i > 0 else None
         gap_after = _gap(p[-1], pieces[i + 1][0]) if i + 1 < len(pieces) else None
         options = [(g, side) for g, side in ((gap_before, -1), (gap_after, 1)) if g is not None and g < limit]
-        # A piece ending a sentence can't take words after it.
-        options = [(g, side) for g, side in options
-                   if not (side == -1 and SENTENCE_END_RE.search(pieces[i - 1][-1]["word"]))]
+        if not single:
+            options = [(g, side) for g, side in options
+                       if not (side == -1 and SENTENCE_END_RE.search(pieces[i - 1][-1]["word"]))]
         if not options:
             i += 1
             continue

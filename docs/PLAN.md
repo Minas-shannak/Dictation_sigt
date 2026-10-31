@@ -397,8 +397,14 @@ Group words into natural sentence-sized exercises, operating on word-level data,
 
 - Split on sentence-ending punctuation (`.`, `?`, `!`), being careful with abbreviations (Mr., Dr., U.S.) and decimals.
 - Use pauses as a secondary signal: a long gap between words (configurable, e.g. over 0.7 s) can end a sentence when punctuation is missing.
-- Enforce a configurable maximum length (words or seconds). Split overly long sentences at a comma or the longest internal pause, never mid-word.
-- Avoid fragments that are too short to be useful: merge a very short trailing piece into its neighbour, unless it is a standalone expression ("Wow!", "Yes.").
+- Enforce a configurable maximum length (words or seconds). Split overly long sentences, never mid-word, at the first available of **\[Decided\]** (after Phase 3):
+  1. the comma nearest the middle;
+  2. the longest real pause (configurable minimum, 0.3 s);
+  3. before a joining word (configurable list: and, but, because, so, or, when, ...), before the first of consecutive ones. In fluent speech Whisper's word gaps are mostly 0, so without this the split falls mid-phrase;
+  4. otherwise the longest gap.
+- Avoid fragments that are too short to be useful: merge a very short trailing piece into its neighbour, unless it is a complete short sentence ("Yes, yes.").
+- **\[Decided\]** One-word pieces: a standalone expression from a configurable list (yes, no, okay, well, oh, wow, hey, yeah, right, perfect, ...) stays as its own sentence, with or without punctuation. Any other single word joins the nearest sentence if the gap to it is under a configurable limit (1.5 s), and stays alone only if both gaps are longer.
+- Clock times written as "10.30" / "11.00" / "12:05" are read as times ("ten thirty", "eleven", "twelve oh five") in the training transcript **\[Decided\]** (see 10B).
 - Never combine words across a long silence into one sentence.
 - Preserve word order and original timestamps exactly.
 

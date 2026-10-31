@@ -165,7 +165,9 @@ def _run(model, audio_path: str, language: Optional[str], on_progress: Optional[
         beam_size=config.BEAM_SIZE,
         word_timestamps=True,
         vad_filter=config.VAD_FILTER,
+        vad_parameters={"threshold": config.VAD_THRESHOLD},
         condition_on_previous_text=config.CONDITION_ON_PREVIOUS_TEXT,
+        initial_prompt=config.INITIAL_PROMPT or None,
     )
     segments: List[Dict] = []
     # The work happens while iterating the generator. Values are converted to plain
@@ -250,9 +252,11 @@ def transcribe_audio(
         "asr_settings": {
             "language": language,
             "vad_filter": config.VAD_FILTER,
+            "vad_threshold": config.VAD_THRESHOLD,
             "condition_on_previous_text": config.CONDITION_ON_PREVIOUS_TEXT,
             "beam_size": config.BEAM_SIZE,
             "word_timestamps": True,
+            "initial_prompt": config.INITIAL_PROMPT,
         },
         "versions": {"faster_whisper": faster_whisper.__version__, "ctranslate2": ctranslate2.__version__},
         "transcribe_seconds": round(elapsed, 2),

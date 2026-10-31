@@ -9,7 +9,7 @@ Update this file at the end of every phase. Commit after every phase.
 | --- | --- |
 | 1. Inspect the project | Done, approved. Decisions recorded in PLAN.md section 0.1 |
 | 2. Audio extraction and AI transcription | Done, approved |
-| 3. Transcript processing | Done, **waiting for review** |
+| 3. Transcript processing | Done, approved; follow-up (one-word rule, experiments) done, **waiting for review** |
 | 4. Unified format and caching | Not started |
 | 5. Background jobs and local upload | Not started |
 | 6. Replace the YouTube caption pipeline | Not started |
@@ -195,3 +195,138 @@ Each change was checked by printing all sentences of all three clips; samples ar
 - **Caching** (Phase 4): `transcript_version`, video IDs and the cache layers are not done.
 
 **Next:** Phase 4, unified format and caching, after review.
+
+## Phase 3 follow-up: one-word rule, yt-dlp + Deno, movie clip, model/VAD/prompt experiments (Oct 31, 2026)
+
+### Decisions applied
+- **Clock times as words:** approved.
+- **Split order** (comma → pause ≥ 0.3 s → before a joining word → longest gap): approved. PLAN.md 10C is updated, and the one-word rule and clock times are recorded there as [Decided].
+- **One-word pieces:**
+  - A standalone expression from `STANDALONE_EXPRESSIONS` (yes, yeah, no, okay, well, oh, wow, hey, right, perfect, really, sorry, …) stays as its own sentence, with or without punctuation.
+  - Any other single word joins the nearest sentence if the gap is under `SINGLE_WORD_MERGE_SECONDS` = 1.5 s, even a finished one, and stays alone only if both gaps are longer.
+  - Pieces of 2+ words keep the old rule.
+  - `PROCESSING_VERSION` is now 2.
+
+  Before/after (all four clips were compared; only these changed):
+
+  | Clip | Before | After |
+  | --- | --- | --- |
+  | conversation | "Whereas." / "Because if you break the rules at school you're a naughty boy" | "Whereas. Because if you break the rules at school you're a naughty boy" |
+  | conversation (unchanged) | "Really?", "Yeah.", "Well" | still alone: they are expressions |
+  | music | "on" (23.49–24.57) | **unchanged**: gaps of 2.1 s and 3.1 s are both over 1.5 s |
+  | numbers | "10-30." / "Or I would say half ten." | "10-30. Or I would say half ten." |
+  | movie (VAD on) | "sorry All I can do is keep you cold Pitch" | "sorry" / "All I can do is keep you cold Pitch" ("sorry" is in the list) |
+
+### yt-dlp needed a JavaScript runtime
+- **Cause:** `cpbARmnt_nU` failed with "This video is not available" (`UNPLAYABLE`), but it was not a restriction. yt-dlp had no JS runtime for YouTube's challenge, so it fell back to a limited player.
+- **Fix:** installed in the venv and pinned:
+  - `deno==2.9.8`, the official pip-packaged binary at `.venv/bin/deno`
+  - `yt-dlp-ejs==0.8.0`, yt-dlp's own challenge scripts, the exact version yt-dlp pins in its default extras
+- **Result:** the download then worked.
+- **Detail:** Deno must be passed explicitly (`--js-runtimes deno:.venv/bin/deno`) because `.venv/bin` is not on the PATH unless the venv is activated. The Phase 6 service must do this. The README documents it, along with how to update yt-dlp.
+
+### Movie clip (cpbARmnt_nU, "Rise of the Guardians" clip, 8:30)
+- **Section used:** 00:00–05:00. It holds three dialogue-free stretches (about 43 s, 32 s and 20 s), found from the old caption cache's timing.
+- **Fixture:** `movie.json`, small with VAD on: 1.43 s, cuda/float16, 818 MiB.
+- **Reference used for recall:** YouTube's old auto-captions for this video (`cache/cpbARmnt_nU.json`), used **only as a test reference** for what was said.
+
+**Main finding: the VAD drops speech mixed with a music score.**
+
+| Run | Audio kept | Words | Reference lines missed | Segments flagged |
+| --- | --- | --- | --- | --- |
+| `movie` (VAD on, threshold 0.5, the current default) | 44.4 s of 300 | 95 | **36 / 56** | 0 |
+| `movie_vad025` (threshold 0.25) | 54.9 s | 111 | 34 / 56 | 2 |
+| `movie_vad01` (threshold 0.1) | 75.3 s | 128 | 29 / 56 | 0 |
+| `movie_novad` (VAD off) | 300 s | 271 | **1 / 56** | 7 |
+
+- **VAD on output is poor:** 17 sentences, several fragments ("Maybe to", "was right like"). VAD also glues distant chunks into one Whisper segment, for example one segment spans 26–113 s. Word times stay correct, and the 2.0 s silence rule keeps each sentence within one moment.
+- **VAD off output is clean:** 59 sentences, for example "It's okay." / "Don't look down." / "Just look at me." / "Jack, I'm scared." / "You're gonna be fine."
+
+**Fillers in the raw results** (the default VAD-on movie run has none):
+- `movie_novad`:
+  - "Uh," at 100.16 s ("Uh, we're gonna have a little fun instead.") was removed, giving "we're gonna have a little fun instead."
+  - "uh," at 125.62 s ("It's as easy as, uh, one.") was removed, giving "It's as easy as, one."
+- `conversation_turbo`: "um" at 43.80 s and "um" at 116.90 s were both removed.
+
+**Expressions:**
+- All kept: right ×6, Hey!, okay ×2, No ×2, Well ×2, Yes in the movie; yes/yeah/oh/well/no/right in the turbo conversation.
+- Three exceptions were dropped by the **hallucination filter** (low word probability), not by cleaning. They are single-word segments inside the score: "Whoa!" (128.88 s, p 0.20), "Oh" (149.20 s, p 0.01) and "Huh." (252.04 s, p 0.07). The reference has no line at those times, so whether they were really spoken is unverified.
+
+**Hallucinations in music/silence:**
+- **VAD on:** none flagged. Suspicious: "Maybe to sorry" (3–12 s, word p 0.48) is a mishearing of "Baby Tooth." / "Sorry.". "…this year. Thank you" (267 s) is really "you nor ever again" (VAD off hears "this year thank you nor ever again"), so it is not the classic "Thank you" hallucination.
+- **VAD off:** 7 segments flagged, all low word probability: "Sigh." (30.0 s, p 0.08, a sound written as a word), "Jack!" (38.0 s, p 0.01), "Whoa!", "Oh", "Huh.", and duplicate counts "Four." (p 0.00) and "Three." (p 0.07).
+- **Song with VAD off:** 2 flagged, "Oh" and **"Music"** (118 s, a classic hallucination).
+- **20 s of silence with VAD off:** Whisper wrote **"You"**, which was flagged and excluded, so no sentences came out (fixture `silence_novad.json`).
+
+**10 sample sentences (`movie_novad`, processed):**
+- 1 [5.62–6.36] You all right?
+- 3 [13.12–14.44] All I can do is keep you cold.
+- 5 [20.84–22.40] I make a mess of everything.
+- 10 [66.74–68.14] Jack, get down from there.
+- 16 [85.54–86.24] Don't look down.
+- 20 [96.10–97.52] But you're gonna be all right.
+- 24 [104.58–105.44] Well, I'll trick you.
+- 33 [121.20–122.38] We're gonna play hops, Scotch.
+- 45 [234.12–236.00] Come on, baby-tooth, I owe you one.
+- 52 [265.12–271.26] any Christmas toys this year thank you nor ever again
+
+### VAD off on the speech clips (does it hurt?)
+- **conversation:** identical word count (747), 0 flagged.
+- **numbers:** 591 vs 606 words, 0 flagged. It **lost one phrase** at 83 s ("it means delayed it or postponed it") and heard "third D" as "3D". It wrote "1030" instead of "10.30", which the number rules still read as "ten thirty". The rest are punctuation and digit-form differences.
+- **Silence:** it hallucinates "You" on pure silence, and the filter catches it.
+
+### Experiment A: large-v3-turbo vs small (conversation clip, GPU)
+
+| | small | large-v3-turbo |
+| --- | --- | --- |
+| Transcribe time (warm) | 4.0 s | 5.2 s |
+| First load | 0.8 s | 73.9 s (download about 1.6 GB, one time); 1.7 s warm |
+| Peak VRAM (process) | 850 MiB | 2,258–2,290 MiB |
+| "grasp me up" (×2) | wrong | **grass me up** ✓ |
+| "dobbin" | wrong | **dobbing** ✓ |
+| "sneaky ziggy" | wrong | **ciggy** ✓ |
+| "setting me up for a form" | wrong | **a fall** ✓ |
+| "wrap someone out" | wrong | **rat someone out** ✓ |
+| "teachers pet / The teachers favorite" | wrong | **teacher's pet / teacher's favorite** ✓ |
+| "You really were a goody two-shoes" | ✓ | **"a good idea"** ✗ |
+| "kept my mouth shut" | ✓ | "kept my mouth you up" ✗ |
+| Fillers | none written | writes "um" (removed by cleaning) |
+| Punctuation and case | 40 sentence ends | **10 sentence ends, lowercase "i" ×22** |
+| Sentences after processing | 80, avg 9.3 words | 69, avg 10.8 words (fewer natural breaks) |
+
+`large-v3-turbo` is supported by faster-whisper 1.2.1 (`mobiuslabsgmbh/faster-whisper-large-v3-turbo`).
+
+### Experiment B: initial_prompt (conversation clip)
+- **Setup:** `INITIAL_PROMPT` added to config (empty = off, the default) and recorded in `asr_settings`. Prompt used: "Hi, how are you? I'm fine, thanks. Well, let's talk about it. It's a long story, but I'll keep it short."
+- **small + prompt:** the unpunctuated 94–139 s stretch went from **0 sentence ends, 0 commas to 15 sentence ends, 10 commas** (160 words). Example: "Do you think your friends saw the teacher coming? Maybe, maybe they were just like setting me up for a form, but even in those circumstances…". Side effects: "rat someone out" ✓, "neighbours" (British spelling), "dobbling" (still wrong), "Yeah, I was a kid" (was "yeah as a kid"). The whole clip has 41 sentence ends vs 40, giving 77 sentences.
+- **large-v3-turbo + prompt:** **no effect**. Still 0 punctuation in the stretch and lowercase "i".
+
+### Other changes
+- `config.VAD_THRESHOLD = 0.5` (faster-whisper's default, so behavior is unchanged), passed as `vad_parameters` and recorded in `asr_settings`.
+- **Older fixtures:** the four made before these settings existed (`conversation`, `music`, `numbers`, `movie`) lack `initial_prompt`/`vad_threshold` in `asr_settings`, which means none / 0.5. `conversation_turbo` and `movie_novad` lack `vad_threshold` (0.5 and n/a). Phase 4 cache keys must treat a missing value as the default.
+- **New fixtures** (532 KB total): `movie`, `movie_novad`, `movie_vad025`, `movie_vad01`, `music_novad`, `music_vad025`, `conversation_novad`, `numbers_novad`, `conversation_turbo`, `conversation_prompt`, `conversation_turbo_prompt`, `silence_novad`.
+
+### Recommendations (for decision)
+1. **VAD: turn it off by default** (`VAD_FILTER = False`) and rely on the hallucination filter.
+   - For movie clips VAD on loses most dialogue (36/56 lines missed vs 1/56), and lowering the threshold barely helps (29/56 at 0.1).
+   - Off, the filter caught every real hallucination we saw: "You" in silence, "Music", "Sigh.", and low-confidence duplicate counts.
+   - Cost: one lost 7-word phrase and "3D" on the numbers clip, and about 2.5 s more GPU time per 4 minutes.
+   - Before Phase 4 decides the cache key, the alternative is to keep VAD on as the default with a per-video "this video has music" retranscribe option. That is a new UI feature, so it's your call.
+2. **Model: keep `small` as the default for now.**
+   - large-v3-turbo fixes most word errors and transcribes fillers, but almost entirely drops punctuation and capitals, which the segmentation depends on, and the prompt doesn't fix it. It also made two new errors.
+   - The VRAM (2.3 GB) and speed are fine on this GPU.
+   - Worth a later test: `large-v3` (non-turbo, about 3–4 GB VRAM), which usually keeps punctuation.
+3. **initial_prompt: enable the tested prompt for `small`.** It gave a clear punctuation gain on the hardest stretch, with no visible harm in this clip. Test it on the other clips before relying on it.
+
+### Tests run (real results)
+- **pytest: 124 passed.**
+  - New one-word-rule tests (expression kept; other words merge within 1.5 s, even after a finished sentence; alone only if both gaps are longer; the limit is configurable).
+  - The movie clip is added to the real-fixture checks.
+  - New regression tests on real output: fillers in `movie_novad` (Uh ×2) and `conversation_turbo` (um ×2) removed, with all expressions in kept segments still present; "You" on silence excluded.
+- `uv pip install --dry-run -r requirements.txt` reported "Would make no changes".
+- All GPU runs: cuda/float16, with nvidia-smi showing the process (peak VRAM recorded per run).
+
+### Not done / open
+- **Decisions needed:** the VAD default, model choice and prompt (recommendations above) affect the layer-1 cache key, so they should be settled before Phase 4.
+- **Speech with background music** (not a song or score) is still untested. So are `large-v3` (non-turbo) and the prompt on the numbers and movie clips.
+- **One-word sentences:** with VAD off the movie clip gives many short ones ("Two.", "Three. Two.", "Make that five."). That's correct for the dialogue, but it shows that counting scenes produce tiny exercises.
