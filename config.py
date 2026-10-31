@@ -7,11 +7,13 @@ they can change without editing code.
 import os
 
 # --- Speech recognition (faster-whisper) -------------------------------------
-# Model size: tiny, base, small, medium, large-v3 or large-v3-turbo. Only this
-# one model is downloaded (on first use, into the Hugging Face cache).
-WHISPER_MODEL = os.environ.get("DICTATION_WHISPER_MODEL", "small")
-# "auto" uses the NVIDIA GPU when CUDA is available and falls back to the CPU;
-# "cpu" never touches CUDA.
+# The Whisper model: large-v3, chosen on real clips for word accuracy (see
+# docs/PROGRESS.md, experiment C). It is downloaded once (about 3 GB) on first use
+# into the Hugging Face cache, and is the only model the app uses: the CPU
+# fallback runs the same model, just slower.
+WHISPER_MODEL = os.environ.get("DICTATION_WHISPER_MODEL", "large-v3")
+# "auto" uses the NVIDIA GPU when CUDA is available and falls back to the CPU
+# (same model, int8; much slower); "cpu" never touches CUDA.
 DEVICE_PREFERENCE = os.environ.get("DICTATION_DEVICE", "auto")
 CUDA_COMPUTE_TYPE = "float16"
 CPU_COMPUTE_TYPE = "int8"
@@ -28,13 +30,14 @@ VAD_THRESHOLD = 0.5
 CONDITION_ON_PREVIOUS_TEXT = False   # reduces repetition loops
 BEAM_SIZE = 5                        # faster-whisper's default
 # Text shown to Whisper as if it came before the audio; a well-punctuated prompt
-# nudges it towards punctuated output. Empty = no prompt. Part of the ASR settings
-# (changing it means retranscribing).
-INITIAL_PROMPT = ""
+# nudges it towards punctuated output. With CONDITION_ON_PREVIOUS_TEXT off,
+# faster-whisper uses it for the first 30 s window only. Part of the ASR settings
+# (changing it means retranscribing). Empty = no prompt.
+INITIAL_PROMPT = "Hi, how are you? I'm fine, thanks. Well, let's talk about it. It's a long story, but I'll keep it short."
 
 # --- Transcript processing (ai/transcript_processor.py) ----------------------
 # Bump whenever processing logic changes in a way that changes the sentences.
-PROCESSING_VERSION = 3
+PROCESSING_VERSION = 4
 
 # Hallucination filter. A segment is excluded from the training transcript (but
 # kept in the raw result) if any rule matches. The defaults for the first two
@@ -59,6 +62,24 @@ KNOWN_HALLUCINATIONS = [
 ]
 KNOWN_HALLUCINATION_MAX_AVG_LOGPROB = -0.5
 KNOWN_HALLUCINATION_MIN_NO_SPEECH = 0.4
+# Prompt leakage: over music or silence Whisper can write the INITIAL_PROMPT text itself
+# (seen on the song: "Let's talk about it." at no_speech_prob 0.98). A segment is flagged
+# if it contains at least this share of the prompt in runs of 2+ words...
+PROMPT_LEAK_MIN_PROMPT_FRACTION = 0.5
+# ...or if at least this share of the segment's 3-word sequences occur in the prompt and the
+# segment is low-confidence (as for known hallucinations) or has at least
+# PROMPT_LEAK_CONFIDENT_MIN_WORDS words. A short, confident "I'm fine, thanks." is real speech
+# and is kept.
+PROMPT_LEAK_MIN_SEGMENT_FRACTION = 0.6
+PROMPT_LEAK_CONFIDENT_MIN_WORDS = 5
+# Stock phrases Whisper writes for silence or music when the segment is only that phrase,
+# has at least ISOLATED_HALLUCINATION_GAP_SECONDS of nothing on both sides (or the clip edge),
+# and a mean word probability below the limit. large-v3 wrote "Thank you." with no_speech_prob
+# 0.14 on pure silence (word probability 0.59), which no other rule catches; a clearly
+# spoken closing "Thank you." scores about 0.9 and is kept.
+ISOLATED_HALLUCINATIONS = ["thank you", "thanks", "thank you very much", "you", "bye", "bye bye"]
+ISOLATED_HALLUCINATION_GAP_SECONDS = 3.0
+ISOLATED_HALLUCINATION_MAX_WORD_PROB = 0.75
 
 # Cleaning. Fillers are matched against whole words (punctuation ignored, any case).
 REMOVE_FILLERS = True

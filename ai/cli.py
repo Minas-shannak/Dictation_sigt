@@ -1,6 +1,6 @@
 """Transcribe a file from the command line, without Flask.
 
-    python -m ai.cli sample.mp3 [--language en|auto] [--model small] [--words] [--twice]
+    python -m ai.cli sample.mp3 [--language en|auto] [--words] [--twice]
     python -m ai.cli tests/fixtures/numbers.json      # reprocess a saved raw result, no transcription
 
 Prints the device used, timings and the resulting dictation sentences.

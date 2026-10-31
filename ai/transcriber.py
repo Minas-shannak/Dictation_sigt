@@ -192,6 +192,20 @@ def _run(model, audio_path: str, language: Optional[str], on_progress: Optional[
     return info, segments
 
 
+def asr_settings(language: Optional[str] = config.DEFAULT_LANGUAGE) -> Dict:
+    """The recognition settings a transcription would use: recorded in every raw result,
+    and part of the cache key (a change means retranscribing). The model is keyed separately."""
+    return {
+        "language": language or None,
+        "vad_filter": config.VAD_FILTER,
+        "vad_threshold": config.VAD_THRESHOLD,
+        "condition_on_previous_text": config.CONDITION_ON_PREVIOUS_TEXT,
+        "beam_size": config.BEAM_SIZE,
+        "word_timestamps": True,
+        "initial_prompt": config.INITIAL_PROMPT,
+    }
+
+
 def transcribe_audio(
     audio_path: str,
     language: Optional[str] = config.DEFAULT_LANGUAGE,
@@ -249,15 +263,7 @@ def transcribe_audio(
         "language_probability": info.language_probability,
         "duration": info.duration,
         "duration_after_vad": info.duration_after_vad,
-        "asr_settings": {
-            "language": language,
-            "vad_filter": config.VAD_FILTER,
-            "vad_threshold": config.VAD_THRESHOLD,
-            "condition_on_previous_text": config.CONDITION_ON_PREVIOUS_TEXT,
-            "beam_size": config.BEAM_SIZE,
-            "word_timestamps": True,
-            "initial_prompt": config.INITIAL_PROMPT,
-        },
+        "asr_settings": asr_settings(language),
         "versions": {"faster_whisper": faster_whisper.__version__, "ctranslate2": ctranslate2.__version__},
         "transcribe_seconds": round(elapsed, 2),
         "segments": segments,

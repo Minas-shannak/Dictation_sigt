@@ -9,7 +9,7 @@ Update this file at the end of every phase. Commit after every phase.
 | --- | --- |
 | 1. Inspect the project | Done, approved. Decisions recorded in PLAN.md section 0.1 |
 | 2. Audio extraction and AI transcription | Done, approved |
-| 3. Transcript processing | Done, approved; follow-ups done. VAD off by default; **model choice pending** (experiment C below) |
+| 3. Transcript processing | Done, approved; follow-ups done. Model decided: large-v3 + prompt, VAD off |
 | 4. Unified format and caching | Not started |
 | 5. Background jobs and local upload | Not started |
 | 6. Replace the YouTube caption pipeline | Not started |
@@ -472,3 +472,73 @@ All runs: matched-word timing agrees with the references (0–5 words off per ru
 - **Playback start for stretched first words** (Phase 7 proposal above).
 - **CPU fallback model** if large-v3 is chosen.
 - **Listen to the movie at 0:38–1:10** to confirm the 4 unverified sentences.
+
+## Model decision follow-up: large-v3 + prompt, safeguards, CPU timing (Oct 31, 2026)
+
+### Decisions applied
+- **Model:**
+  - `WHISPER_MODEL = "large-v3"` and `INITIAL_PROMPT` set to the tested prompt by default.
+  - `small` is removed from config, README and CLI usage.
+  - The CPU fallback already reloads the **same** model (int8); there is no second model.
+  - The small fixtures stay as historical data (`tests/fixtures/experiments/*_small.json`).
+- **Main fixtures** (`tests/fixtures/{conversation,numbers,movie,music,silence}.json`) re-transcribed with the defaults: large-v3 + prompt, VAD off, cuda/float16, 3.8–4.1 GB VRAM, 0.7–12 s each. The identical `experiments/*_large-v3_prompt.json` were removed.
+- **PLAN.md:**
+  - Typo fixed in section 0.
+  - Section 0.1: item 10 rewritten (large-v3 only, same model on the CPU, "Running on CPU, this will be slow" with real progress), and items 13 (prompt safeguards) and 14 (`play_start` for stretched first words, Phase 7) added.
+  - Section 6A: large-v3 decision and the prompt-scope finding. Section 6C: same model on the CPU.
+  - Section 7: prompt-leak and isolated-phrase rules. Section 9B: `play_start`.
+  - Section 11: example shows `"model": "large-v3"`, `"vad_filter": false` and the prompt. Section 14C: CPU message.
+
+### 1a. Prompt leakage: real, now flagged
+- **Checked:** large-v3 + prompt on silence, song, movie, conversation and numbers, looking for any segment sharing a 3-word run with the prompt.
+  - silence, movie, conversation, numbers: **none**
+  - **song: one leak**, "Let's talk about it." at 27.1 s over music (no_speech_prob 0.98, word probability 0.26)
+- **Safeguard** (`prompt_leak` reason; the prompt comes from the raw result's `asr_settings`, so reprocessing always uses the prompt that was actually used). A segment is flagged if either:
+  1. it contains ≥ 50% of the prompt in runs of 2+ words, or
+  2. ≥ 60% of its 3-word sequences occur in the prompt **and** it is low-confidence or has ≥ 5 words.
+
+  Short confident real speech ("I'm fine, thanks.", "Hi, how are you doing today?") is kept.
+- **Tested:**
+  - hand-made cases (whole and most of the prompt, the low-confidence short leak, confident short replies kept, no prompt means no rule)
+  - real leaks: the song (main fixture), plus the hotwords experiment below, where 6 of 7 leaked lines are flagged `prompt_leak`. The 7th, a confident 3-word "I'm fine, thanks.", is kept by this rule but still excluded by low word probability.
+- **Second slip-through found and fixed:**
+  - **Problem:** on the 20 s of silence, large-v3 wrote **"Thank you."** with no_speech_prob 0.14, avg_logprob −0.31 and word probability 0.59. No rule caught it. The song also ends with an unflagged "Thank you." after 7.6 s of music.
+  - **New rule** `isolated_stock_phrase`: flags a segment that is only a stock phrase ("thank you", "thanks", "you", "bye", …), has ≥ 3 s of nothing on both sides (or the clip edge), and has a mean word probability < 0.75. A clearly spoken closing "Thank you." (about 0.9) is kept. Both real cases are now flagged, and hand-made tests cover kept cases (clear speech, nearby speech).
+- **Real-clip exclusions now:**
+  - song: "Let's talk about it." (prompt leak) and "Thank you." (isolated)
+  - silence: "Thank you."
+  - movie: "Oh, my God." at 147.2 s (low word probability, during the score, unverified)
+  - conversation and numbers: none
+
+### 1b. Prompt scope (faster-whisper 1.2.1 source, `transcribe.py`)
+- **What the source does:**
+  - `generate_segments` puts the prompt tokens at the start of `all_tokens`. Each 30 s window uses `previous_tokens = all_tokens[prompt_reset_since:]`.
+  - After every window, `prompt_reset_since = len(all_tokens)` when `condition_on_previous_text` is False (lines 1372–1383).
+  - **So `initial_prompt` only conditions the first 30 s window.**
+- **Consistent with the data, but the earlier "improvement" was mostly incidental:**
+  - Per-window comparisons show text changing in every later window too. That is a knock-on effect: a different first window shifts where every later window starts.
+  - For small, 30–60 s went 9 → 3 sentence ends; for large-v3, 60–240 s went 6 → 13.
+  - The prompt's *direct* effect is the first window (large-v3: commas 0 → 5 in 0–30 s). The WER difference (3.8% vs 4.1%) is within this knock-on variation.
+- **`hotwords` tested, rejected:** passing the prompt as `hotwords` (which `get_prompt` inserts into every window) was tried on conversation, song, silence and movie (`experiments/*_large-v3_hotwords.json`).
+  - **Punctuation:** much better (conversation 59 sentence ends / 38 commas / 0 lowercase "i", vs 18 / 9 / 15).
+  - **Speech lost:** **178 words of real speech deleted** on the conversation clip (WER 25.2%).
+  - **Leaks:** the prompt leaked into the song 7 times and into the movie once.
+  - Not used. `INITIAL_PROMPT` stays (harmless, small first-window benefit).
+
+### 2. CPU fallback timing (large-v3 int8, GPU hidden)
+- **Conversation clip (240 s):** **97.2 s** to transcribe, 103.9 s in total including a 3.8 s model load. That is about 0.4× real time on this Intel Core 7 240H (16 threads), with peak RAM about 4.0 GB.
+- **Progress** is real and steady: updates every ~11 s (one 30 s window per step), 3% → 100%.
+- **Accuracy is the same as on the GPU:** WER 3.7% vs 3.8%, same punctuation, 73 sentences (`experiments/conversation_large-v3_cpu.json`).
+- **Rough estimate:** a 20-minute video would take about 8–9 minutes on the CPU, extrapolated, not measured.
+- **Phase 5/7 UI:** "Running on CPU, this will be slow" plus the real percentage.
+
+### Also fixed
+- **Split inside a converted number:**
+  - **Problem:** the max-length splitter split between words made from one token ("…one hundred" | "and fifty kids…" from "150"), because "and" is a joining word. Sentences then overlapped in time.
+  - **Fix:** a split never falls between words with the same source token.
+  - **Tested:** hand-made, plus the real conversation fixture via the ordering test.
+- `PROCESSING_VERSION = 4`.
+
+### Tests run
+- pytest: **137 passed** (before Phase 4).
+- GPU runs: 5 main fixtures + 4 hotwords experiments (cuda/float16). CPU run: 1 (cpu/int8).

@@ -342,6 +342,51 @@ def test_empty_results_say_why():
     assert process_transcript(raw_of(seg(timed("Hello there."))))["empty_reason"] is None
 
 
+PROMPT = "Hi, how are you? I'm fine, thanks. Well, let's talk about it. It's a long story, but I'll keep it short."
+
+
+def flags_with_prompt(*segments):
+    return {i: r for i, r in find_hallucinations(list(segments), default_settings(), PROMPT).items()}
+
+
+def test_prompt_leak_whole_or_most_of_the_prompt_is_flagged():
+    whole = seg(timed(PROMPT))
+    most = seg(timed("Well, let's talk about it. It's a long story, but I'll keep it short."))
+    assert flags_with_prompt(whole, most) == {0: ["prompt_leak"], 1: ["prompt_leak"]}
+
+
+def test_prompt_leak_short_pieces_need_low_confidence():
+    leak = seg(timed("Let's talk about it.", 10.0), nsp=0.98, logprob=-0.65)       # as on the song
+    real = seg(timed("I'm fine, thanks.", 20.0), nsp=0.05, logprob=-0.2)           # confident reply
+    greeting = seg(timed("Hi, how are you doing today?", 30.0), nsp=0.05, logprob=-0.2)
+    assert flags_with_prompt(leak, real, greeting) == {0: ["prompt_leak"]}
+
+
+def test_prompt_leak_needs_a_prompt():
+    assert find_hallucinations([seg(timed(PROMPT))], default_settings(), "") == {}
+
+
+def test_isolated_stock_phrase_needs_silence_around_it_and_low_probability():
+    lonely = seg([(" Thank", 9.5, 10.0, 0.6), (" you.", 10.0, 12.3, 0.58)])
+    flagged = find_hallucinations([lonely], default_settings())
+    assert flagged == {0: ["isolated_stock_phrase"]}
+    # Clearly spoken: kept.
+    clear = seg([(" Thank", 9.5, 10.0, 0.95), (" you.", 10.0, 10.4, 0.93)])
+    assert find_hallucinations([clear], default_settings()) == {}
+    # Part of a conversation (speech 1 s before): kept.
+    talk = seg(timed("So that was my story.", 7.0))  # ends at 8.5 s
+    assert find_hallucinations([talk, lonely], default_settings()) == {}
+
+
+def test_long_sentence_is_never_split_inside_a_converted_number():
+    tokens = timed("you know boys trying to find their place in like the hierarchy of the year and there was", 0.0) + \
+        [(" 150", 6.0, 6.3)] + timed("kids in my year.", 6.3)
+    r = process_transcript(raw_of(seg(tokens)))
+    for st in r["sentences"]:
+        assert "one hundred and fifty" in st["text"] or "fifty" not in st["text"]
+    assert all(r["sentences"][i]["end"] <= r["sentences"][i + 1]["start"] for i in range(len(r["sentences"]) - 1))
+
+
 # --- Settings and output ----------------------------------------------------------
 
 def test_unknown_setting_is_rejected():
@@ -369,13 +414,14 @@ def real(request):
     return request.param, raw, result
 
 
-# What the filter excludes on the real clips (VAD off). Speech clips: nothing. Movie: Whisper's
-# guesses during the music score, checked against the caption reference: "Sigh." (a sound),
-# duplicate counts "Four."/"Three." (the reference has each once, and the first copy is kept);
-# "Jack!", "Whoa!", "Oh", "Huh." are single low-confidence words with no reference line.
+# What the filter excludes on the real clips (large-v3 + prompt, VAD off). Speech clips: nothing.
+# Song: the prompt leaking over music ("Let's talk about it.", no_speech_prob 0.98) and a closing
+# "Thank you." after 7.6 s of music. Movie: "Oh, my God." during the score (low word probability,
+# no reference line there, so unverified).
 EXPECTED_EXCLUSIONS = {
-    "conversation": [], "music": [], "numbers": [],
-    "movie": ["Sigh.", "Jack!", "Whoa!", "Oh", "Huh.", "Four.", "Three."],
+    "conversation": [], "numbers": [],
+    "music": ["Let's talk about it.", "Thank you."],
+    "movie": ["Oh, my God."],
 }
 
 
@@ -421,10 +467,9 @@ def test_real_numbers_clip_reads_times_as_words():
     r = process_transcript(raw)
     text = r["training_transcript"]
     assert "ten thirty" in text and "twelve thirty" in text and "forty-five minutes" in text
-    assert "one p.m., two p.m., three p.m., etc." in text and "eleven o'clock" in text
-    # Whisper wrote "1030" here, read like a year as "ten thirty"; only ambiguous tokens stay as written.
-    assert "1030" not in text and "one thousand" not in text
-    assert re.findall(r"\S*\d\S*", text) == ["3D", "10-30.", "10-30."]
+    assert "one p.m two p.m three p.m" in text and "eleven o'clock" in text
+    assert "one thousand" not in text
+    assert re.findall(r"\S*\d\S*", text) == ["3-0,"]  # "three zero", ambiguous: left as written
 
 
 def _fixture_raw(name):
@@ -432,7 +477,9 @@ def _fixture_raw(name):
 
 
 @pytest.mark.parametrize("name, fillers", [
-    ("movie", [("Uh,", 100.16), ("uh,", 125.62)]),
+    ("movie", [("uh,", 125.4)]),
+    ("conversation", [("um", 43.62), ("um", 116.8)]),
+    ("experiments/movie_small", [("Uh,", 100.16), ("uh,", 125.62)]),
     ("experiments/conversation_turbo", [("um", 43.8), ("um", 116.9)]),
 ])
 def test_real_fillers_are_removed_and_expressions_kept(name, fillers):
@@ -454,11 +501,24 @@ def test_real_fillers_are_removed_and_expressions_kept(name, fillers):
     assert found == fillers
 
 
-def test_real_silence_hallucination_is_excluded():
-    # Whisper without VAD writes "You" for 20 s of silence.
-    r = process_transcript(_fixture_raw("silence"))
-    assert [e["text"] for e in r["excluded"]] == ["You"]
+@pytest.mark.parametrize("name, text, reason", [
+    ("silence", "Thank you.", "isolated_stock_phrase"),         # large-v3, no_speech_prob 0.14
+    ("experiments/silence_small", "You", "low_word_probability+isolated_stock_phrase"),
+])
+def test_real_silence_hallucination_is_excluded(name, text, reason):
+    # Without VAD, Whisper writes something for 20 s of digital silence.
+    r = process_transcript(_fixture_raw(name))
+    assert [(e["text"], "+".join(e["reasons"])) for e in r["excluded"]] == [(text, reason)]
     assert r["sentences"] == [] and r["empty_reason"] == "all_excluded"
+
+
+def test_real_prompt_leaks_are_flagged_as_such():
+    # The prompt passed as hotwords (every window) leaks into the song again and again.
+    raw = _fixture_raw("experiments/music_large-v3_hotwords")
+    raw = dict(raw, asr_settings=dict(raw["asr_settings"], initial_prompt=raw["asr_settings"]["hotwords"]))
+    leaks = [e["text"] for e in process_transcript(raw)["excluded"] if "prompt_leak" in e["reasons"]]
+    assert leaks == ["Let's talk about it.", "It's a long story, but I'll keep it short.", "Well, let's talk about it.",
+                     "Let's talk about it.", "I'm fine, thanks.", "I'm fine, thanks."]
 
 
 def test_lowercase_i_is_capitalized_in_the_training_transcript_only():

@@ -8,7 +8,7 @@ This plan is executed in phases across several sessions, not in one pass.
 
 - Before changing anything, make sure the project is under git and commit the current state. Commit again at the end of every phase so each phase can be rolled back.
 - **Phase 1 (inspection) ends with a written report and STOPS.** Do not write code until I approve the proposed design.
-- Work on one or two phases per session. Do not try to complete townerhe whole plan at once.
+- Work on one or two phases per session. Do not try to complete the whole plan at once.
 - At the end of each phase report: what changed, files created or modified, new dependencies, tests performed and their actual results, and what remains incomplete.
 - Never claim a test passed if it was not actually run. If a test needs a video, hardware or environment you do not have, say so clearly.
 - If an architectural decision is unclear or potentially destructive, explain the trade-off and ask before acting.
@@ -30,9 +30,11 @@ Decided after the Phase 3 experiments:
 
 8. **VAD off by default:** `vad_filter=False` (configurable, part of the layer-1 cache key). On a movie clip VAD dropped 36 of 56 dialogue lines spoken over the score (1 of 56 with VAD off); the hallucination filter handles what Whisper writes for music and silence. No "has music" UI option.
 9. **Very short exercises** ("Two.", "Make that five.") and small mishearings such as "3D" are acceptable.
-10. **Model:** `small` stays the working default until experiment C is reviewed; model and prompt are part of the layer-1 key, so this does not block Phase 4.
+10. **Model:** `large-v3` with `INITIAL_PROMPT`, for everything. `small` is dropped entirely: no small default and no small fallback. If CUDA fails, the same large-v3 model runs on the CPU (int8); no second model and no "re-transcribe" button. Because CPU large-v3 is slow, the UI must clearly show "Running on CPU, this will be slow" with real progress. (Experiment C, PROGRESS.md.)
 11. **Lowercase "i":** standalone "i", "i'm", "i'll", "i've", "i'd" become "I..." in the training transcript only (section 10A).
 12. **YouTube captions** may be used only as a test reference in `tests/` and `docs/`, never in application code.
+13. **Prompt safeguards:** a segment that substantially repeats the prompt is flagged as a hallucination (`prompt_leak`), and an isolated low-confidence stock phrase such as "Thank you." on silence is flagged (`isolated_stock_phrase`). See section 7.
+14. **Stretched first words:** a separate per-sentence `play_start`, computed in processing (layer 2), may only move playback start *later* than the stored start; stored word timestamps never change; every adjustment is logged; tested with the "they're" case from the movie clip. Implemented in Phase 7 (section 9B).
 
 ## 1. Main Objective
 
@@ -236,9 +238,9 @@ Library: [faster-whisper](https://github.com/SYSTRAN/faster-whisper). Check its 
 
 ### A. Model
 
-- Start with `small`. Do not download multiple models automatically.
-- Compared on real clips (experiment C, see PROGRESS.md): small / small + prompt / large-v3 / large-v3 + prompt / large-v3-turbo. The default is chosen after that review.
-- Configurable via one setting (config file or environment variable), not hardcoded: `tiny`, `base`, `small`, `medium`, `large-v3`, and `large-v3-turbo` if the installed version supports it.
+- **\[Decided\]** `large-v3` with a short punctuated `INITIAL_PROMPT`, chosen on real clips for word accuracy (experiment C in PROGRESS.md: small, small + prompt, large-v3, large-v3 + prompt, large-v3-turbo). It is the only model: the CPU fallback uses it too. Do not download other models automatically.
+- The model name is still one setting (config file or environment variable), not hardcoded.
+- `initial_prompt` applies to the first 30 s window only when `condition_on_previous_text=False` (checked in the faster-whisper source). Passing the prompt as `hotwords` (every window) was tested and rejected: it deleted real speech and leaked the prompt into music.
 
 ### B. Loading strategy
 
@@ -250,7 +252,7 @@ Library: [faster-whisper](https://github.com/SYSTRAN/faster-whisper). Check its 
 
 My machine: Ubuntu laptop with hybrid graphics: Intel Raptor Lake iGPU + NVIDIA GeForce RTX 5060 Laptop / Max-Q (Blackwell, GB206). Verify VRAM, driver version and CUDA version with nvidia-smi. Blackwell is newer than most guides assume: it needs a recent NVIDIA driver, CUDA 12.8 or newer, and a recent CTranslate2 build (older builds fail with errors such as CUBLAS\_STATUS\_NOT\_SUPPORTED or no kernel image available). Pin faster-whisper and ctranslate2 to versions confirmed to work on this GPU, and confirm the NVIDIA GPU (not the Intel iGPU) is the one in use.
 
-- Preferred: `device="cuda"`, `compute_type="float16"`. Fallback: `device="cpu"`, `compute_type="int8"`.
+- Preferred: `device="cuda"`, `compute_type="float16"`. Fallback: `device="cpu"`, `compute_type="int8"`, **with the same model** (`large-v3`). The UI shows "Running on CPU, this will be slow" with real progress (section 14C).
 - **Important:** with CTranslate2, the model can load on CUDA successfully and then fail on the FIRST transcription (for example, a missing `libcudnn` or `libcublas` library). The fallback must therefore cover errors at load time AND at transcription time. On a CUDA runtime error during transcription: log it, switch the shared model to CPU once, retry that job on CPU, and keep using CPU for the session.
 - Never claim GPU acceleration when running on CPU. Include `device` and `compute_type` in the transcription metadata and logs, and show them in the UI (small text is enough).
 - If CUDA fails, log an actionable message: which library was missing and how to install it (for example the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` pip packages and `LD_LIBRARY_PATH`).
@@ -296,6 +298,8 @@ Add a hallucination filter in `transcript_processor.py`, applied before cleaning
 - Detect the same phrase repeated consecutively more than N times.
 - Flag segments whose words have very low average `probability`.
 - Optionally, a small configurable list of known hallucination phrases, matched only when the segment is also low-confidence.
+- **\[Decided\]** Prompt leakage: a segment that substantially repeats the initial prompt is flagged (`prompt_leak`). Short pieces of the prompt count only when the segment is low-confidence, so real speech like "I'm fine, thanks." is kept.
+- **\[Decided\]** Isolated stock phrases ("Thank you.", "You", ...) with several seconds of nothing on both sides and low word probability are flagged (`isolated_stock_phrase`); large-v3 wrote "Thank you." on pure silence with a low no-speech probability, which no other rule caught.
 
 Rules:
 
@@ -366,6 +370,7 @@ Whisper word timestamps are estimates and can be off by roughly 0.1–0.3 s, esp
 
 - Add configurable padding at playback time: `pad_before` (default about 0.1 s) and `pad_after` (default about 0.25 s).
 - Clamp padding so a sentence never plays into the next sentence's first word or before the previous sentence's end.
+- **\[Decided\]** Stretched first words: after music or a pause Whisper sometimes stretches a sentence's first word back over the music (movie clip: "they're" starts 6 s early). Processing (layer 2) adds a per-sentence `play_start` that may only be *later* than the stored `start`, never earlier. Stored word timestamps never change, every adjustment is logged, and the "they're" case is a test. Phase 7.
 - Apply padding in the player logic only. Stored timestamps stay unpadded.
 - Keep the existing timing offset feature; it applies on top of padding.
 
@@ -434,10 +439,10 @@ The dictation engine receives the same structure for every source. Illustrative 
   "original_filename": null,
   "language": "en",
   "language_probability": 0.99,
-  "model": "small",
+  "model": "large-v3",
   "device": "cuda",
   "compute_type": "float16",
-  "asr_settings": { "vad_filter": true, "condition_on_previous_text": false },
+  "asr_settings": { "vad_filter": false, "condition_on_previous_text": false, "initial_prompt": "Hi, how are you? ..." },
   "processing_settings": { "remove_fillers": true },
   "processing_version": 1,
   "transcript_version": "a1b2c3",
@@ -518,7 +523,7 @@ Transcription can take minutes, so it must not run inside the HTTP request.
 
 1. Downloading / extracting audio.
 2. Loading the AI model (first run only).
-3. Transcribing audio, with a percentage from section 6F.
+3. Transcribing audio, with a percentage from section 6F. On the CPU fallback, clearly: "Running on CPU, this will be slow", with the same real progress.
 4. Processing transcript.
 5. Preparing dictation exercises.
 

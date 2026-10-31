@@ -11,6 +11,7 @@ to the original is never lost.
 Public function: process_transcript(raw, settings=None).
 """
 
+import difflib
 import logging
 import re
 from decimal import Decimal
@@ -28,6 +29,8 @@ SETTING_NAMES = [
     "HALLUCINATION_NO_SPEECH_PROB", "HALLUCINATION_MAX_AVG_LOGPROB", "HALLUCINATION_MAX_COMPRESSION",
     "HALLUCINATION_MIN_WORD_PROB", "HALLUCINATION_MAX_PHRASE_REPEATS", "HALLUCINATION_MAX_WORD_REPEATS",
     "KNOWN_HALLUCINATIONS", "KNOWN_HALLUCINATION_MAX_AVG_LOGPROB", "KNOWN_HALLUCINATION_MIN_NO_SPEECH",
+    "PROMPT_LEAK_MIN_PROMPT_FRACTION", "PROMPT_LEAK_MIN_SEGMENT_FRACTION", "PROMPT_LEAK_CONFIDENT_MIN_WORDS",
+    "ISOLATED_HALLUCINATIONS", "ISOLATED_HALLUCINATION_GAP_SECONDS", "ISOLATED_HALLUCINATION_MAX_WORD_PROB",
     "REMOVE_FILLERS", "FILLER_PATTERNS", "PROTECTED_WORDS", "NON_SPEECH_ANNOTATIONS",
     "NUMBERS_TO_WORDS",
     "SENTENCE_MAX_WORDS", "SENTENCE_MAX_SECONDS", "SENTENCE_MIN_WORDS", "STANDALONE_EXPRESSIONS",
@@ -53,6 +56,16 @@ def default_settings() -> Dict:
     def jsonable(v):
         return sorted(v) if isinstance(v, set) else v
     return {name.lower(): jsonable(getattr(config, name)) for name in SETTING_NAMES}
+
+
+def resolve_settings(overrides: Optional[Dict] = None) -> Dict:
+    """default_settings() with overrides applied; unknown names are an error."""
+    s = default_settings()
+    for key, value in (overrides or {}).items():
+        if key not in s:
+            raise ValueError(f"Unknown processing setting: {key}")
+        s[key] = value
+    return s
 
 
 def _plain(text: str) -> str:
@@ -82,9 +95,28 @@ def _repetition_loop(tokens: List[str], max_phrase: int, max_word: int) -> bool:
     return False
 
 
-def find_hallucinations(segments: List[Dict], s: Dict) -> Dict[int, List[str]]:
-    """Segment index -> reasons it is flagged. Unflagged segments are absent."""
+def _prompt_leak(words: List[str], prompt: List[str], low_confidence: bool, s: Dict) -> bool:
+    """True if the segment repeats the initial prompt (see PROMPT_LEAK_* in config)."""
+    if len(words) < 3 or len(prompt) < 3:
+        return False
+    blocks = difflib.SequenceMatcher(None, words, prompt, autojunk=False).get_matching_blocks()
+    if sum(b.size for b in blocks if b.size >= 2) >= s["prompt_leak_min_prompt_fraction"] * len(prompt):
+        return True
+    prompt_trigrams = {tuple(prompt[i:i + 3]) for i in range(len(prompt) - 2)}
+    trigrams = [tuple(words[i:i + 3]) for i in range(len(words) - 2)]
+    share = sum(t in prompt_trigrams for t in trigrams) / len(trigrams)
+    return share >= s["prompt_leak_min_segment_fraction"] and (
+        low_confidence or len(words) >= s["prompt_leak_confident_min_words"])
+
+
+def find_hallucinations(segments: List[Dict], s: Dict, prompt: str = "") -> Dict[int, List[str]]:
+    """Segment index -> reasons it is flagged. Unflagged segments are absent.
+
+    prompt: the initial prompt the raw result was transcribed with (its asr_settings).
+    """
     known = [_plain(p) for p in s["known_hallucinations"]]
+    isolated = {_plain(p) for p in s["isolated_hallucinations"]}
+    prompt_words = _plain(prompt or "").split()
     flagged: Dict[int, List[str]] = {}
     prev_text, run = None, 0
     for i, seg in enumerate(segments):
@@ -103,6 +135,14 @@ def find_hallucinations(segments: List[Dict], s: Dict) -> Dict[int, List[str]]:
                           or seg["no_speech_prob"] > s["known_hallucination_min_no_speech"])
         if low_confidence and any(p and p in text for p in known):
             reasons.append("known_hallucination")
+        if _prompt_leak(text.split(), prompt_words, low_confidence, s):
+            reasons.append("prompt_leak")
+        # A clip edge counts as an endless gap.
+        gap_before = seg["start"] - segments[i - 1]["end"] if i > 0 else float("inf")
+        gap_after = segments[i + 1]["start"] - seg["end"] if i + 1 < len(segments) else float("inf")
+        if (text in isolated and min(gap_before, gap_after) >= s["isolated_hallucination_gap_seconds"]
+                and words and sum(w["probability"] for w in words) / len(words) < s["isolated_hallucination_max_word_prob"]):
+            reasons.append("isolated_stock_phrase")
         # The same segment text over and over is a decoding loop across segments.
         run = run + 1 if text and text == prev_text else 1
         prev_text = text
@@ -318,7 +358,9 @@ def _gap(a: Dict, b: Dict) -> float:
 def _split_point(piece: List[Dict], s: Dict) -> Optional[int]:
     """Where to split an over-long piece (see SENTENCE_SPLIT_* in config for the order)."""
     n, min_words = len(piece), s["sentence_min_words"]
-    allowed = range(min_words, n - min_words + 1)  # index of the first word of the second part
+    # k = index of the first word of the second part. Never between words made from one
+    # token ("one hundred | and fifty" from "150"): that would split a word.
+    allowed = [k for k in range(min_words, n - min_words + 1) if piece[k]["source"] != piece[k - 1]["source"]]
     if not allowed:
         return None
     middle = n / 2
@@ -414,14 +456,9 @@ def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
 
     settings: overrides for default_settings() (lowercase config names).
     """
-    s = default_settings()
-    for key, value in (settings or {}).items():
-        if key not in s:
-            raise ValueError(f"Unknown processing setting: {key}")
-        s[key] = value
-
+    s = resolve_settings(settings)
     segments = raw.get("segments") or []
-    flagged = find_hallucinations(segments, s)
+    flagged = find_hallucinations(segments, s, (raw.get("asr_settings") or {}).get("initial_prompt") or "")
 
     # Runs of words between excluded segments; an excluded segment is a hard sentence break.
     runs: List[List[Dict]] = [[]]
