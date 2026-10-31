@@ -1,8 +1,6 @@
 # Python 3.12 venv (created with: uv venv --python 3.12 .venv)
 # Install with: uv pip install --python .venv/bin/python -r requirements.txt
 flask==3.1.3
-youtube-transcript-api==1.2.4  # caption source; removed in Phase 6
-pytest==9.2.0
 
 # Speech recognition. Versions confirmed working on the RTX 5060 Laptop (Blackwell)
 # with driver 615.71: CTranslate2 4.8.4 wheels are built with CUDA 12.8.
@@ -14,7 +12,7 @@ onnxruntime==1.31.1  # VAD filter
 # cuDNN is not needed: CTranslate2 4.6+ wheels are built without it.
 nvidia-cublas-cu12==12.9.3.13
 
-# YouTube audio (Phase 6). Breaks when YouTube changes; update with:
+# YouTube audio (services/youtube_audio.py). Breaks when YouTube changes; update with:
 #   uv pip install --python .venv/bin/python -U yt-dlp   (then update this pin)
 yt-dlp==2026.10.26
 # YouTube now requires solving a JavaScript challenge; without a JS runtime some

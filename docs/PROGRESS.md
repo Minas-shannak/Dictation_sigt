@@ -11,8 +11,8 @@ Update this file at the end of every phase. Commit after every phase.
 | 2. Audio extraction and AI transcription | Done, approved |
 | 3. Transcript processing | Done, approved; follow-ups done. Model decided: large-v3 + prompt, VAD off |
 | 4. Unified format and caching | Done |
-| 5. Background jobs and local upload | Done, **waiting for review** |
-| 6. Replace the YouTube caption pipeline | Not started |
+| 5. Background jobs and local upload | Done, approved |
+| 6. Replace the YouTube caption pipeline | Done, **waiting for review** |
 | 7. Integrate with the dictation engine | Not started |
 | 8. Test and fix regressions | Not started |
 
@@ -771,3 +771,62 @@ Sentences marked unclear at each threshold:
   - the listening-check test now requires that anything written in the music-only span is excluded (turbo writes nothing there)
   - new clarity test and single-word repeat test
   - the cache test's "other model" is now large-v3
+
+## Item 3: Recent-video reopen label (verified)
+- **Recorded** (browser, MutationObserver on the stage text): reopening an uploaded video from Recent videos showed exactly `["Opening"]`, with no "Uploading 0%".
+- **YouTube loads:** these now start with "Starting". Before, they briefly showed "Waiting for another video to finish". Recorded: `["Starting"]` for a cached YouTube video.
+
+## Phase 6: YouTube audio instead of captions (Nov 1, 2026)
+
+### Done
+- **`services/youtube_audio.py`:** isolated, and the only place yt-dlp is used.
+  - **ID first:** `extract_video_id()` (moved from `app.py`) validates the link before any download.
+  - **Download:** `downloaded_audio(video_id, check, on_progress, on_info)` downloads the **audio-only** stream (`bestaudio/best`, no playlist, `writesubtitles`/`writeautomaticsub` False, no cookies or login) into a temporary folder, which is always deleted afterwards (including on cancel or failure).
+  - **Deno:** the venv's Deno is passed as `js_runtimes`, with a log warning if it is missing.
+  - **Live streams:** rejected.
+  - **Progress and cancel:** progress is downloaded bytes / total; cancellation goes through the progress hook (a real check: the BaseException propagates out of yt-dlp).
+  - **Errors** are logged in full and mapped to friendly messages: private, age-restricted, members-only, DRM, blocked/429/"not a bot", unavailable, or generic. The unavailable and generic messages suggest updating yt-dlp or uploading the file.
+- **`app.py`:** **no caption code left.**
+  - **Removed:** the `youtube-transcript-api` import, caption fetching and caption segmentation (`clean_text`, `clean_cues`, `merge_cues`, `split_long_line`, `segment`, `ApiError`, `fetch_transcript`) and `GET /api/transcript`.
+  - **New** `POST /api/youtube {url, language}` returns `{video: {video_id: "yt:<id>", youtube_id, browser_playable}, job}`. The job uses the same pipeline as uploads, `get_transcript` with an audio callable: stage **"downloading_audio"** (with progress and the video title from yt-dlp), then "extracting_audio", then loading, transcribing, processing and preparing. A cached transcript skips the download.
+- **Stage reporting:** `get_transcript` no longer reports "extracting_audio" itself; each audio source reports its own stages. Jobs carry a `title`.
+- **Frontend:**
+  - **Load** posts to `/api/youtube` and uses the same processing panel, showing "Downloading audio NN%", the title, the device, Cancel, and the CPU warning. When done, practice starts with the YouTube player through the shared interface.
+  - **New records** use `yt:<id>` keys. Pre-Phase-6 records (bare ID) still open from Recent; the Phase 7 migration clears them.
+  - The caption-language error display is gone, and the language box is the spoken language for Whisper (empty = detect).
+  - `app.js?v=4`.
+- **Requirements:** `youtube-transcript-api` and `pytest` moved to the new `requirements-dev.txt`, which includes `requirements.txt`. **App code does not import the caption library**; a test enforces it for `app.py`, `config.py`, `ai/` and `services/`. The reference fetcher is now a committed tool, `tests/tools/fetch_references.py` (dev only), and it keeps the human-verified lines when refetching.
+- **Old caption cache files** (`cache/<id>.json`, 7 files) are **untouched**: modification dates are still Oct 29–31 and nothing reads them. They are left for the Phase 7 migration.
+- **README:** how it works (audio only), files, dev requirements, troubleshooting for yt-dlp, blocked, restricted and CPU cases, and the Ctrl+Enter wording.
+
+### Found and fixed during real testing
+1. **Subtitle-credit hallucination:**
+   - **Problem:** large-v3-turbo wrote **"Tanya Cushman Reviewer."** over a TED talk's intro music (no_speech_prob 0.00, word probability 0.67, isolated: speech starts 10.5 s later). This is the classic credit text Whisper learned from subtitled videos, and no rule caught it.
+   - **Fix:** `ISOLATED_CREDIT_WORDS` (reviewer, translator, transcriber, subtitles, captions, …). An isolated segment containing one, with low word probability, is flagged `isolated_stock_phrase`; the word inside normal speech is kept. `PROCESSING_VERSION = 6`.
+   - **Verified:** the cached TED transcript was reprocessed without re-downloading, and the credit is excluded.
+2. **yt-dlp wording:** yt-dlp now says "This video is unavailable", which fell through to the generic message. Added, with a test.
+3. **Temp files after a hard kill:**
+   - **Problem:** temp files were left in `/tmp` if the process died mid-job (found because the pytest worker thread was killed at exit). `finally` blocks don't run on a hard kill.
+   - **Fix:** `remove_stale_temp_files()` deletes the app's `dictation-audio-*` / `dictation-youtube-*` items older than 6 h, at startup and daily. The tests now wait for background jobs (`JobManager.wait_idle()`), and no temp files are left after test runs (checked twice).
+
+### Tests run (real results)
+- **pytest: 204 passed** (twice, 0 temp files left). Caption tests (`test_segment.py`) removed. New `tests/test_youtube_audio.py` (fake yt-dlp):
+  - **IDs and errors:** link formats including `&list=`; error mapping for 9 messages
+  - **Download options and cleanup:** audio only, no subtitles, no cookies, Deno passed; progress; the temp folder is deleted, including after a cancel; live and unavailable errors; an invalid ID is rejected before yt-dlp is created
+  - **Route:** `/api/youtube` validation and a job with the download stage and title; a friendly failure
+  - **Guard:** app code never imports the caption library
+  - **Other new tests:** isolated subtitle credit; stale temp cleanup
+- **Real YouTube, browser** (headless Firefox, scratch data folders):
+  - **"Me at the zoo" (`jNQXAC9IVRw`):** Downloading audio → Loading the AI model → Transcribing (GPU cuda float16) → practice in **8.6 s**, header "large-v3-turbo · GPU float16".
+    - Four sentences with timings, starting "Alright, so here we are, one of the elephants."
+    - The YouTube player paused at line end, Enter played, and the title came from the player.
+  - **Reopen from Recent:** cached, 0.1 s.
+  - **Unavailable video (`aaaaaaaaaaa`):** now "This video is unavailable (removed, private, or blocked in your country). Try updating yt-dlp (see the README), or upload the video file instead."
+  - **Invalid link:** "That doesn't look like a YouTube video link."
+  - **TED talk, 14 min (`arj7oStGLkU`):** audio download 1.3 s (13 MB, opus), transcription 16.7 s (843.7 s of audio, 2280 words), **practice after 23.7 s**, 236 sentences after the credit fix (2 marked unclear). Paused at the line end.
+  - **Browser console:** no errors.
+- **Real cancel** (`Jnw4J8Wj3k4`, 20 min, curl): cancelled at 21% of transcription. Status `cancelled`, **no layer-1 entry**, **no temp folder or WAV** left.
+- **Syntax:** Python 3.10 parse of all files OK; `node --check` OK.
+
+### Not done / next (Phase 7)
+- The engine still uses the old `lines` format through the adapter, and the old padding (0.2 / 0.15 s). Still to come: `play_start`, clamping, the clarity badge and the stats rule for skipped unclear sentences, progress tied to `transcript_version`, and the clean-start migration (back up and clear old localStorage records and the old caption cache).

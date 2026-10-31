@@ -169,3 +169,20 @@ def test_cancelled_convert_leaves_nothing(media, tmp_path):
     with pytest.raises(Stop):
         ax.convert_for_browser(media["mov"], dest, check=check)
     assert os.listdir(tmp_path) == []
+
+
+def test_stale_temp_files_from_a_killed_server_are_removed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ax.tempfile, "gettempdir", lambda: str(tmp_path))
+    old_wav = tmp_path / "dictation-audio-old.wav"
+    old_dir = tmp_path / "dictation-youtube-old"
+    new_wav = tmp_path / "dictation-audio-running.wav"
+    other = tmp_path / "someone-else.wav"
+    for p in (old_wav, new_wav, other):
+        p.write_bytes(b"x")
+    old_dir.mkdir()
+    (old_dir / "audio.webm.part").write_bytes(b"x")
+    past = time.time() - 7 * 60 * 60
+    for p in (old_wav, old_dir, other):
+        os.utime(p, (past, past))
+    assert ax.remove_stale_temp_files() == 2
+    assert sorted(os.listdir(tmp_path)) == ["dictation-audio-running.wav", "someone-else.wav"]

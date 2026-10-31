@@ -62,11 +62,12 @@ python app.py
 Open http://localhost:8000 in Chrome, paste a YouTube link and press **Load**, or press
 **Upload a video…** to practise with a video file of your own (MP4, MOV or WebM, up to 2 GB).
 
-Run the tests with `pytest`.
+Run the tests with `pytest` (install the dev requirements first:
+`uv pip install --python .venv/bin/python -r requirements-dev.txt`).
 
 ## Files
 
-- `app.py`: Flask server (serves the page, `/static/` and the caption API)
+- `app.py`: Flask server (the page, `/static/`, and the API for YouTube and uploaded videos, jobs and media)
 - `index.html`: page markup only
 - `static/style.css`: all styles, including the light and dark themes
 - `static/app.js`: all frontend code (player, typing, sounds, stats, saved progress)
@@ -82,20 +83,27 @@ Run the tests with `pytest`.
 - `services/transcript_cache.py`: builds the unified transcript for a video and caches it in two layers
 - `services/jobs.py`: runs transcriptions and conversions in the background, one at a time, with progress and cancel
 - `services/uploads.py`: stores uploaded videos (`uploads/`, named by content hash) and deletes ones not opened for 30 days
-- `tests/`: pytest tests (run `pytest`)
+- `services/youtube_audio.py`: downloads a YouTube video's audio-only stream with yt-dlp (never captions)
+- `tests/`: pytest tests (run `pytest`); `tests/tools/fetch_references.py` refetches the caption references
 - `docs/`: the plan for the audio-based pipeline and the progress log
 - `cache/`: `asr/` holds raw speech recognition results (rebuilt only when the model or recognition settings
   change), `transcripts/` the processed transcripts (rebuilt from `asr/` when processing changes, without
-  transcribing again). The `<videoId>.json` files directly in `cache/` are the old caption cache.
+  transcribing again). The `<videoId>.json` files directly in `cache/` are the old caption cache; the app no
+  longer reads them.
 
 After editing `style.css` or `app.js`, bump the version in its link in `index.html`
 (`style.css?v=1` → `?v=2`, `app.js?v=1` → `?v=2`) so Chrome doesn't keep using a cached old copy.
 
 ## How it works
 
-- `app.py` fetches the video's captions (manual ones first, auto-generated as a fallback),
-  cleans them and merges them into sentence-sized lines. The result is cached in
-  `cache/<videoId>.json`, so a video is only fetched from YouTube once. Delete the file to refetch.
+- The text always comes from the video's actual audio, never from captions: the audio is downloaded
+  (YouTube, with yt-dlp) or taken from the uploaded file, transcribed with Whisper (large-v3-turbo) on
+  the GPU, cleaned up and split into sentence-sized lines with word timings. Text Whisper writes for
+  music or silence ("Thank you.", subtitle credits, the prompt) is left out. The result is cached, so
+  a video is only transcribed once. The small box next to the link is the spoken language (`en`
+  by default; empty = detect it).
+- Each sentence gets a clarity score (how sure Whisper is of its words); sentences below 0.7 are
+  marked unclear (`SENTENCE_CLARITY_MIN` in `config.py`).
 - Letters and digits are hidden as dots. Type the letters and digits of each word, then press
   **Space** to finish the word (the last word of a line needs no space). Punctuation is filled in
   for you, so for "story, of" you type `story`, then Space, then `of`. Case and accents don't matter.
@@ -103,7 +111,7 @@ After editing `style.css` or `app.js`, bump the version in its link in `index.ht
   box under the sentence, which shows only the word you're typing.
 - Colors: teal for finished words, orange for the word you're typing, purple for hinted letters.
 - A line never plays on its own. The next one starts after you finish the current one.
-- Use **Offset** (−0.5 s to +0.5 s) if a video's captions are slightly early or late. It's saved per video.
+- Use **Offset** (−0.5 s to +0.5 s) if a video's lines start slightly early or late. It's saved per video.
 - The theme follows your system's light/dark setting. The 🌙/☀️ button in the corner overrides it, and the choice is remembered.
 - Progress, offset, stats and missed words are stored in the browser's localStorage, per video.
 - **Uploaded videos** are checked (type, content, size), stored in `uploads/` and transcribed from their own audio
@@ -126,7 +134,7 @@ After editing `style.css` or `app.js`, bump the version in its link in `index.ht
 | Ctrl+→ | Next line |
 | Ctrl+← | Previous line |
 | Ctrl+H | Hint: reveal the next letter. Press twice in a row to reveal the rest of the word |
-| Ctrl+Enter | Accept the current word as-is (for wrong auto-captions) |
+| Ctrl+Enter | Accept the current word as-is (when the transcript got a word wrong) |
 | Ctrl+M | Mute / unmute typing sounds (volume slider next to the speaker button) |
 
 After 3 wrong keys on the same letter (or space), it's revealed automatically in purple and counts like a
@@ -157,9 +165,12 @@ at the top of `static/app.js`.
 
 ## Troubleshooting
 
-- *"YouTube is blocking or rate-limiting requests"*: YouTube throttles caption requests from
-  some IPs. Wait a while and try again. Already-cached videos keep working.
+- *"YouTube audio is unavailable right now"* or *"This video is unavailable"*: yt-dlp breaks when
+  YouTube changes. Update it (see "YouTube audio" above), or upload the video file instead.
+  Already-transcribed videos keep working from the cache.
+- *"YouTube is refusing downloads from this computer"*: YouTube throttles some IPs. Wait a while.
+- *Private, age-restricted or members-only videos* can't be downloaded; nothing tries to get around that.
 - *"The owner doesn't allow this video to be embedded"*: that video can't be played outside
-  youtube.com. Pick another one.
-- *No captions in that language*: the error lists the languages that are available. Type
-  one of those codes in the small box next to the link.
+  youtube.com. Pick another one, or upload the file.
+- *"Running on CPU, this will be slow"*: the GPU couldn't be used; the log says why (for example a
+  missing CUDA library). The same model runs on the CPU, about 0.4× real time.

@@ -1,0 +1,7 @@
+# Tests and test tooling (not needed to run the app).
+# Install with: uv pip install --python .venv/bin/python -r requirements-dev.txt
+-r requirements.txt
+pytest==9.2.0
+# Only for tests/tools/fetch_references.py: YouTube captions as a test reference.
+# The app never reads captions.
+youtube-transcript-api==1.2.4

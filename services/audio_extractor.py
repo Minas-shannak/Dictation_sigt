@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import selectors
+import shutil
 import subprocess
 import tempfile
 import time
@@ -25,6 +26,8 @@ import config
 log = logging.getLogger(__name__)
 
 Check = Callable[[], None]
+# Temporary files and folders the app creates in the system temp folder.
+TEMP_PREFIXES = ("dictation-audio-", "dictation-youtube-")
 
 
 class AudioError(Exception):
@@ -89,6 +92,33 @@ def probe(path: str) -> ProbeResult:
     if result.duration <= 0:
         raise AudioError("empty", "This file is empty or has zero length.")
     return result
+
+
+def remove_stale_temp_files(max_age_seconds: float = 6 * 60 * 60) -> int:
+    """Delete the app's temp files left by a server that was killed mid-job.
+
+    Normally `finally` blocks delete them; a hard kill skips those. Only items older
+    than max_age_seconds are touched, so a running job's files are never removed.
+    """
+    removed = 0
+    folder = tempfile.gettempdir()
+    limit = time.time() - max_age_seconds
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if not name.startswith(TEMP_PREFIXES):
+            continue
+        try:
+            if os.path.getmtime(path) >= limit:
+                continue
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+            removed += 1
+            log.info("Removed stale temp item %s", path)
+        except FileNotFoundError:
+            pass
+    return removed
 
 
 def run_ffmpeg(args: list, timeout: float, check: Optional[Check] = None,

@@ -41,7 +41,7 @@ INITIAL_PROMPT = "Hi, how are you? I'm fine, thanks. Well, let's talk about it. 
 
 # --- Transcript processing (ai/transcript_processor.py) ----------------------
 # Bump whenever processing logic changes in a way that changes the sentences.
-PROCESSING_VERSION = 5
+PROCESSING_VERSION = 6
 
 # Hallucination filter. A segment is excluded from the training transcript (but
 # kept in the raw result) if any rule matches. The defaults for the first two
@@ -82,6 +82,11 @@ PROMPT_LEAK_CONFIDENT_MIN_WORDS = 5
 # 0.14 on pure silence (word probability 0.59), which no other rule catches; a clearly
 # spoken closing "Thank you." scores about 0.9 and is kept.
 ISOLATED_HALLUCINATIONS = ["thank you", "thanks", "thank you very much", "you", "bye", "bye bye"]
+# Subtitle credits Whisper learned from subtitled videos ("Translator: ... Reviewer: ..."): an
+# isolated segment containing one of these words counts like a stock phrase (seen on a TED
+# talk's intro music: "Tanya Cushman Reviewer.", word probability 0.67).
+ISOLATED_CREDIT_WORDS = ["reviewer", "translator", "transcriber", "transcription", "subtitles", "subtitled",
+                         "captions", "captioned", "captioning"]
 ISOLATED_HALLUCINATION_GAP_SECONDS = 3.0
 ISOLATED_HALLUCINATION_MAX_WORD_PROB = 0.75
 

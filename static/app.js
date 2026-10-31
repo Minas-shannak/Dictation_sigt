@@ -99,30 +99,28 @@ function newLineCounters() {
 // ---- Loading ---------------------------------------------------------------------------
 $("loadForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  loadVideo($("urlInput").value.trim(), $("langInput").value.trim() || "en");
+  loadVideo($("urlInput").value.trim(), $("langInput").value.trim());  // empty language = detect
 });
 
+// YouTube: the server downloads the audio and transcribes it in a background job,
+// shown in the same processing panel as uploads.
 async function loadVideo(url, lang) {
   $("loadError").textContent = "";
   if (!url) return;
   let res, body;
   try {
-    res = await fetch(`/api/transcript?url=${encodeURIComponent(url)}&lang=${encodeURIComponent(lang)}`);
+    res = await fetch("/api/youtube", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, language: lang }),
+    });
     body = await res.json();
   } catch (err) {
     $("loadError").textContent = "Could not reach the local server. Is `python app.py` running?";
     return;
   }
-  if (!res.ok) {
-    let msg = body.message || "Something went wrong.";
-    if (body.available && body.available.length) {
-      msg += "\nAvailable: " + body.available.map((a) => `${a.code} (${a.name}, ${a.source})`).join(", ");
-    }
-    $("loadError").textContent = msg;
-    return;
-  }
-  if (!body.lines.length) { $("loadError").textContent = "The captions for this video are empty."; return; }
-  startPractice(body, lang, (box, events) => makeYouTubePlayer(box, body.videoId, events));
+  if (!res.ok) { $("loadError").textContent = body.message || "Something went wrong."; return; }
+  resetProcessing(body.video.youtube_id, "starting");
+  startLocalJob(body);
 }
 
 // data: { videoId, lines: [{start, duration, text}] }; makePlayer(container, events) -> player.
@@ -164,8 +162,9 @@ function renderRecent() {
     li.addEventListener("click", () => {
       $("langInput").value = rec.lang || "en";
       if (local) { openLocalVideo(rec); return; }
-      $("urlInput").value = `https://www.youtube.com/watch?v=${rec.id}`;
-      loadVideo(rec.id, rec.lang || "en");
+      const youtubeId = rec.id.replace(/^yt:/, "");  // records from before Phase 6 use the bare ID
+      $("urlInput").value = `https://www.youtube.com/watch?v=${youtubeId}`;
+      loadVideo(youtubeId, rec.lang || "en");
     });
     list.appendChild(li);
   }
@@ -190,6 +189,8 @@ $("backBtn").addEventListener("click", () => {
 const STAGES = {
   uploading: "Uploading",
   opening: "Opening",
+  starting: "Starting",
+  downloading_audio: "Downloading audio",
   queued: "Waiting for another video to finish",
   extracting_audio: "Extracting audio",
   loading_model: "Loading the AI model (first run only, can take a while)",
@@ -274,7 +275,11 @@ function pollJob(id, onStatus) {
 
 function onTranscribeStatus(st) {
   if (st.state === "queued") renderProc("queued", null, st.queue_position ? ` (${st.queue_position} ahead)` : "");
-  else if (st.state === "running") renderProc(st.stage || "extracting_audio", st.stage === "transcribing" ? st.progress : null);
+  else if (st.state === "running") {
+    const measured = st.stage === "transcribing" || st.stage === "downloading_audio";
+    renderProc(st.stage || "extracting_audio", measured ? st.progress : null);
+  }
+  if (st.title) $("procTitle").textContent = st.title;
   if (st.device) {
     $("procDevice").textContent = st.from_cache ? "loaded from cache"
       : st.device === "cpu" ? `CPU (${st.compute_type})` : `GPU (${st.device}, ${st.compute_type})`;
@@ -336,9 +341,11 @@ function maybeStartLocal() {
     lines: t.sentences.map((st) => ({ id: st.index, start: st.start, duration: st.end - st.start, text: st.text })),
   };
   const asr = `${t.model} · ${t.device === "cpu" ? "CPU" : "GPU"} ${t.compute_type}`;
+  const youtubeId = local.video.youtube_id;
   $("processing").classList.add("hidden");
   startPractice(data, $("langInput").value.trim(),
-    (box, events) => makeHtml5Player(box, `/media/${encodeURIComponent(t.video_id)}`, events),
+    youtubeId ? (box, events) => makeYouTubePlayer(box, youtubeId, events)
+              : (box, events) => makeHtml5Player(box, `/media/${encodeURIComponent(t.video_id)}`, events),
     { title: local.video.original_filename, asr });
 }
 
@@ -851,7 +858,7 @@ function deleteBack() {
   advance();          // cursor goes back to j and the mistake counter resets
 }
 
-// For words the auto-captions got wrong.
+// For words the transcript got wrong.
 function acceptWord() {
   if (state.completing || state.cursor < 0) return;
   state.hintStreak = 0;

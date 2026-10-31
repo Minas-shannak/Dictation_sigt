@@ -238,7 +238,7 @@ def test_atomic_write_leaves_no_partial_file_on_failure(tmp_path, monkeypatch):
 def test_progress_and_stages_are_reported_on_a_miss_only(env):
     stages, progress = [], []
     tc.get_transcript(SOURCE, env.extract, on_progress=progress.append, on_stage=stages.append)
-    assert stages == ["extracting_audio", "processing", "preparing"] and progress == [1.0]
+    assert stages == ["processing", "preparing"] and progress == [1.0]  # the audio source reports its own stages
     stages.clear()
     tc.get_transcript(SOURCE, env.extract, on_stage=stages.append)
     assert stages == ["processing"]

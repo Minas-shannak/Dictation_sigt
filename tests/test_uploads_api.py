@@ -43,7 +43,8 @@ def media(tmp_path_factory):
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "UPLOAD_DIR", tmp_path / "uploads")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
-    monkeypatch.setattr(app_module, "jobs", app_module.JobManager())
+    jobs = app_module.JobManager()
+    monkeypatch.setattr(app_module, "jobs", jobs)
     calls = []
 
     def fake_get_transcript(source, extract_audio, language=None, processing_settings=None, on_progress=None, on_stage=None):
@@ -59,7 +60,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "get_transcript", fake_get_transcript)
     c = app_module.app.test_client()
     c.calls, c.tmp = calls, tmp_path
-    return c
+    yield c
+    jobs.wait_idle()  # let background jobs finish, so their temp files are cleaned up
 
 
 def upload(client, data, name, language="en"):

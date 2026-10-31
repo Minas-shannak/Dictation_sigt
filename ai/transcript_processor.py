@@ -30,7 +30,8 @@ SETTING_NAMES = [
     "HALLUCINATION_MIN_WORD_PROB", "HALLUCINATION_MAX_PHRASE_REPEATS", "HALLUCINATION_MAX_WORD_REPEATS",
     "KNOWN_HALLUCINATIONS", "KNOWN_HALLUCINATION_MAX_AVG_LOGPROB", "KNOWN_HALLUCINATION_MIN_NO_SPEECH",
     "PROMPT_LEAK_MIN_PROMPT_FRACTION", "PROMPT_LEAK_MIN_SEGMENT_FRACTION", "PROMPT_LEAK_CONFIDENT_MIN_WORDS",
-    "ISOLATED_HALLUCINATIONS", "ISOLATED_HALLUCINATION_GAP_SECONDS", "ISOLATED_HALLUCINATION_MAX_WORD_PROB",
+    "ISOLATED_HALLUCINATIONS", "ISOLATED_CREDIT_WORDS", "ISOLATED_HALLUCINATION_GAP_SECONDS",
+    "ISOLATED_HALLUCINATION_MAX_WORD_PROB",
     "REMOVE_FILLERS", "FILLER_PATTERNS", "PROTECTED_WORDS", "NON_SPEECH_ANNOTATIONS",
     "NUMBERS_TO_WORDS",
     "SENTENCE_MAX_WORDS", "SENTENCE_MAX_SECONDS", "SENTENCE_MIN_WORDS", "STANDALONE_EXPRESSIONS",
@@ -117,6 +118,7 @@ def find_hallucinations(segments: List[Dict], s: Dict, prompt: str = "") -> Dict
     """
     known = [_plain(p) for p in s["known_hallucinations"]]
     isolated = {_plain(p) for p in s["isolated_hallucinations"]}
+    credit_words = set(s["isolated_credit_words"])
     prompt_words = _plain(prompt or "").split()
     flagged: Dict[int, List[str]] = {}
     prev_text, run = None, 0
@@ -141,7 +143,8 @@ def find_hallucinations(segments: List[Dict], s: Dict, prompt: str = "") -> Dict
         # A clip edge counts as an endless gap.
         gap_before = seg["start"] - segments[i - 1]["end"] if i > 0 else float("inf")
         gap_after = segments[i + 1]["start"] - seg["end"] if i + 1 < len(segments) else float("inf")
-        if (text in isolated and min(gap_before, gap_after) >= s["isolated_hallucination_gap_seconds"]
+        stock = text in isolated or bool(credit_words & set(text.split()))
+        if (stock and min(gap_before, gap_after) >= s["isolated_hallucination_gap_seconds"]
                 and words and sum(w["probability"] for w in words) / len(words) < s["isolated_hallucination_max_word_prob"]):
             reasons.append("isolated_stock_phrase")
         # The same segment text over and over is a decoding loop across segments. A single

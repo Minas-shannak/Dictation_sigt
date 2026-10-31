@@ -42,6 +42,7 @@ class Job:
         self.device: Optional[str] = None
         self.compute_type: Optional[str] = None
         self.from_cache = False
+        self.title: Optional[str] = None     # e.g. the YouTube title, once known
         self.error: Optional[Dict[str, str]] = None
         self.result: Any = None
         self.created_at = time.time()
@@ -71,7 +72,7 @@ class Job:
     def status(self, queue_position: Optional[int] = None) -> Dict:
         out = {"id": self.id, "kind": self.kind, "state": self.state, "stage": self.stage,
                "progress": self.progress, "device": self.device, "compute_type": self.compute_type,
-               "from_cache": self.from_cache, "error": self.error}
+               "from_cache": self.from_cache, "title": self.title, "error": self.error}
         if queue_position is not None:
             out["queue_position"] = queue_position
         if self.state == "done":
@@ -129,6 +130,14 @@ class JobManager:
                 self._finish(job, "cancelled")
         log.info("Job %s (%s) cancellation requested", job.id[:8], job.kind)
         return True
+
+    def wait_idle(self, timeout: float = 30.0) -> None:
+        """Block until no job is queued or running (for tests and scripts)."""
+        deadline = time.monotonic() + timeout
+        while any(not j.finished for j in list(self._jobs.values())):
+            if time.monotonic() > deadline:
+                raise TimeoutError("jobs still running")
+            time.sleep(0.02)
 
     def wait(self, job_id: str, timeout: float = 30.0) -> Dict:
         """Block until the job finishes (for tests and scripts)."""

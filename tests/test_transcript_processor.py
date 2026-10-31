@@ -566,3 +566,14 @@ def test_repeated_single_word_segments_get_the_single_word_limit():
     assert sorted(find_hallucinations(loop, default_settings())) == [6, 7]
     phrases = [seg(timed("I love you.", i * 2.0)) for i in range(5)]
     assert sorted(find_hallucinations(phrases, default_settings())) == [3, 4]
+
+
+def test_isolated_subtitle_credit_is_flagged():
+    # Real case: large-v3-turbo on the intro music of a TED talk (arj7oStGLkU), speech starts at 12.3 s.
+    credit = seg([(" Tanya", 1.06, 1.46, 0.32), (" Cushman", 1.46, 1.8, 0.72), (" Reviewer.", 1.8, 1.84, 0.97)],
+                 nsp=0.0, logprob=-0.4)
+    talk = seg(timed("So in college, I was a government major,", 12.28))
+    assert find_hallucinations([credit, talk], default_settings()) == {0: ["isolated_stock_phrase"]}
+    # The word inside ordinary speech is kept.
+    speech = seg(timed("The reviewer said it was fine.", 5.0))
+    assert find_hallucinations([speech, talk], default_settings()) == {}

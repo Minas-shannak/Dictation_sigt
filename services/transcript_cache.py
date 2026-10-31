@@ -225,9 +225,7 @@ def get_transcript(
         log.info("Layer-1 cache hit for %s (%s): no transcription needed", source.video_id, asr_path.name)
     else:
         log.info("Layer-1 cache miss for %s: transcribing with %s", source.video_id, model)
-        if on_stage:
-            on_stage("extracting_audio")
-        with extract_audio() as audio_path:
+        with extract_audio() as audio_path:  # reports its own stages (downloading, extracting)
             raw = transcribe_audio(audio_path, language=language, model_name=model,
                                    on_progress=on_progress, on_stage=on_stage)
         validate_raw(raw)
