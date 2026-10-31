@@ -1,0 +1,81 @@
+  :root { color-scheme: light; --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --accent: #0a66c2; --bad: #d93025; --good: #188038; --bg: #fafafa;
+          --surface: #fff; --masked: #b0b0b5; --cursor-bg: #cfe0fb; --done: #0d9488; --typing: #ea580c; --hinted: #7c3aed; }
+  /* Dark: follows the system setting unless the theme button picked light or dark. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { color-scheme: dark; --fg: #ececf0; --muted: #9a9aa2; --line: #3a3a40; --accent: #4c9aff; --bad: #f05a4e; --good: #3fb950; --bg: #161618;
+            --surface: #232327; --masked: #5c5c63; --cursor-bg: #2f4a6e; --done: #2dd4bf; --typing: #fb923c; --hinted: #a78bfa; }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; --fg: #ececf0; --muted: #9a9aa2; --line: #3a3a40; --accent: #4c9aff; --bad: #f05a4e; --good: #3fb950; --bg: #161618;
+          --surface: #232327; --masked: #5c5c63; --cursor-bg: #2f4a6e; --done: #2dd4bf; --typing: #fb923c; --hinted: #a78bfa; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  main { max-width: 982px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin: 0 0 16px; }
+  h1 { font-size: 22px; margin: 0; }
+  #themeBtn { padding: 4px 10px; }
+  button { font: inherit; padding: 6px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  input[type=text] { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); }
+  input[type=range] { accent-color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .error { color: var(--bad); margin: 12px 0; white-space: pre-line; }
+  .hidden { display: none !important; }
+
+  #urlInput { flex: 1; min-width: 240px; }
+  #langInput { width: 60px; }
+
+  /* Video, controls and progress bar share one width. Height capped so the typing area stays on screen. */
+  #stage { width: min(100%, 950px, calc(50vh * 16 / 9)); margin: 12px auto 0; }
+  #playerBox { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden; }
+  #playerBox iframe, #player { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* Keeps clicks (and keyboard focus) out of the YouTube iframe. */
+  #playerShield { position: absolute; inset: 0; cursor: pointer; }
+  #playerError { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: #fff; background: rgba(0,0,0,.85); }
+
+  #controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+  .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #progressCount { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .iconBtn { width: 40px; height: 40px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; background: transparent; }
+  .iconBtn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #progressBar { height: 4px; margin-top: 12px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  #progressFill { width: 0; height: 100%; background: var(--done); transition: width .3s; }
+  #timeText { margin-top: 4px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  #dictation { margin: 28px auto 20px; text-align: center; cursor: text; word-break: break-word;
+               font: 28px/1.8 ui-monospace, "DejaVu Sans Mono", Menlo, monospace; }
+  .word { display: inline-block; white-space: nowrap; }
+  .ch { display: inline-block; min-width: 1ch; margin: 0 1px; text-align: center; }
+  .ch.masked, .ch.pending { color: var(--masked); }
+  .ch.typing { color: var(--typing); }
+  .ch.done { color: var(--done); }
+  .ch.hinted { color: var(--hinted); }
+  .ch.accepted { color: var(--muted); }
+  .ch.cursor { background: var(--cursor-bg); border-radius: 4px; }
+  .ch.wrong { background: var(--bad); color: #fff; border-radius: 4px; }
+
+  #wordBox { position: relative; width: min(100%, 480px); min-height: 54px; margin: 0 auto; padding: 10px 16px; border: 1px solid var(--line); border-radius: 12px;
+             background: var(--surface); text-align: center; cursor: text; font: 24px/1.4 ui-monospace, "DejaVu Sans Mono", Menlo, monospace; }
+  #wordBox.focused { border-color: var(--accent); }
+  #wordBox .wrongKey { color: var(--bad); }
+  #wordBox .placeholder { color: var(--muted); font: 14px/32px system-ui, sans-serif; }
+  #typer { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; }
+
+  #secondary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+  #muteBtn { padding: 6px 10px; }
+  #volume { width: 90px; vertical-align: middle; }
+
+  #stats { display: flex; gap: 24px; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+  #stats b { color: var(--fg); font-weight: 600; }
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--muted); }
+  #missedList { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 0; list-style: none; }
+  #missedList li { padding: 2px 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; font-size: 14px; }
+  #missedList li span { color: var(--muted); margin-left: 4px; }
+
+  #recent { margin-top: 32px; }
+  #recent h2 { font-size: 16px; margin: 0 0 8px; }
+  #recentList { list-style: none; padding: 0; margin: 0; }
+  #recentList li { display: flex; gap: 12px; align-items: baseline; padding: 10px 12px; margin-bottom: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+  #recentList li:hover { border-color: var(--accent); }
+  #recentList .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

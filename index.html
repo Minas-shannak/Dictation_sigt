@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dictation</title>
+<script>
+  // Applied before first paint so a saved theme doesn't flash.
+  try { const t = localStorage.getItem("dictation:theme"); if (t) document.documentElement.dataset.theme = JSON.parse(t); } catch {}
+</script>
+<link rel="stylesheet" href="/static/style.css?v=1">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Dictation</h1>
+    <button id="themeBtn" type="button" title="Switch light / dark theme"></button>
+  </header>
+
+  <section id="loadScreen">
+    <form id="loadForm" class="row">
+      <input id="urlInput" type="text" placeholder="Paste a YouTube link" autocomplete="off">
+      <input id="langInput" type="text" value="en" title="Caption language code">
+      <button type="submit">Load</button>
+    </form>
+    <div id="loadError" class="error"></div>
+    <div id="recent" class="hidden">
+      <h2>Recent videos</h2>
+      <ul id="recentList"></ul>
+    </div>
+  </section>
+
+  <section id="practiceScreen" class="hidden">
+    <div class="row">
+      <button id="backBtn" type="button">← Videos</button>
+      <span id="videoTitle" class="muted"></span>
+    </div>
+
+    <div id="stage">
+      <div id="playerBox">
+        <div id="player"></div>
+        <div id="playerShield" title="Click to replay the line"></div>
+        <div id="playerError" class="hidden"></div>
+      </div>
+
+      <div id="controls">
+        <div>
+          <div class="label">Progress</div>
+          <div id="progressCount">–</div>
+        </div>
+        <div class="row">
+          <button id="prevBtn" class="iconBtn" type="button" title="Previous line (Ctrl+←)" aria-label="Previous line">
+            <svg viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg></button>
+          <button id="playPauseBtn" class="iconBtn" type="button" title="Play / pause" aria-label="Play or pause">
+            <svg id="playIcon" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            <svg id="pauseIcon" class="hidden" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg></button>
+          <button id="replayBtn" class="iconBtn" type="button" title="Replay line (Tab)" aria-label="Replay line">
+            <svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button>
+          <button id="nextBtn" class="iconBtn" type="button" title="Next line (Ctrl+→)" aria-label="Next line">
+            <svg viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg></button>
+          <button id="hintBtn" class="iconBtn" type="button" title="Hint (Ctrl+H)" aria-label="Hint">
+            <svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg></button>
+          <button id="fullscreenBtn" class="iconBtn" type="button" title="Fullscreen" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
+        </div>
+      </div>
+      <div id="progressBar"><div id="progressFill"></div></div>
+      <div id="timeText">00:00 / 00:00</div>
+    </div>
+
+    <div id="dictation"><div id="lineText"></div></div>
+
+    <div id="wordBox">
+      <input id="typer" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Type what you hear">
+      <span id="currentWord"></span>
+    </div>
+
+    <div id="secondary">
+      <div class="row">
+        <button id="muteBtn" type="button" title="Typing sounds (Ctrl+M)">🔊</button>
+        <input id="volume" type="range" min="0" max="100" step="1" title="Typing sound volume">
+        <label class="muted">Offset
+          <button id="offsetDown" type="button">−</button>
+          <span id="offsetValue">0.0s</span>
+          <button id="offsetUp" type="button">+</button>
+        </label>
+      </div>
+      <div id="stats">
+        <span>Last line: <b id="lineStats">–</b></span>
+        <span>Video average: <b id="videoStats">–</b></span>
+      </div>
+    </div>
+
+    <details id="missedPanel">
+      <summary>Missed words (<span id="missedCount">0</span>)</summary>
+      <ul id="missedList"></ul>
+    </details>
+  </section>
+</main>
+
+<script src="/static/app.js?v=1"></script>
+</body>
+</html>

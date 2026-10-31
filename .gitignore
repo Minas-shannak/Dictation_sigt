@@ -1,0 +1,20 @@
+# Python environment and tooling
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+
+# Generated data (regenerable; old caption cache is backed up explicitly before the Phase 7 migration)
+cache/
+uploads/
+backup/
+
+# Large media files. Audio is not ignored globally so static/sounds/ stays tracked.
+*.mp4
+*.webm
+*.mov
+*.mkv
+*.avi
+*.m4a
+*.opus
+*.flac
