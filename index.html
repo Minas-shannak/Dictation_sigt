@@ -8,7 +8,7 @@
   // Applied before first paint so a saved theme doesn't flash.
   try { const t = localStorage.getItem("dictation:theme"); if (t) document.documentElement.dataset.theme = JSON.parse(t); } catch {}
 </script>
-<link rel="stylesheet" href="/static/style.css?v=1">
+<link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
 <main>
@@ -20,10 +20,27 @@
   <section id="loadScreen">
     <form id="loadForm" class="row">
       <input id="urlInput" type="text" placeholder="Paste a YouTube link" autocomplete="off">
-      <input id="langInput" type="text" value="en" title="Caption language code">
+      <input id="langInput" type="text" value="en" title="Language code (en, fr, ...); empty = detect automatically">
       <button type="submit">Load</button>
     </form>
+    <div id="uploadRow" class="row">
+      <span class="muted">or</span>
+      <label id="uploadBtn" title="MP4, MOV or WebM, up to 2 GB">Upload a video…
+        <input id="fileInput" type="file" accept=".mp4,.m4v,.mov,.webm,video/mp4,video/quicktime,video/webm" hidden></label>
+    </div>
     <div id="loadError" class="error"></div>
+    <div id="processing" class="hidden">
+      <div class="row"><b id="procTitle"></b><span id="procDevice" class="muted"></span></div>
+      <div id="procStage"></div>
+      <div id="procBar"><div id="procFill"></div></div>
+      <div id="procCpu" class="warn hidden">Running on CPU, this will be slow.</div>
+      <div id="procCodec" class="warn hidden">
+        <span id="procCodecText"></span>
+        <button id="convertBtn" type="button">Convert</button>
+        <span id="convertStatus" class="muted"></span>
+      </div>
+      <div class="row"><button id="cancelBtn" type="button">Cancel</button></div>
+    </div>
     <div id="recent" class="hidden">
       <h2>Recent videos</h2>
       <ul id="recentList"></ul>
@@ -34,6 +51,7 @@
     <div class="row">
       <button id="backBtn" type="button">← Videos</button>
       <span id="videoTitle" class="muted"></span>
+      <span id="asrInfo" class="muted"></span>
     </div>
 
     <div id="stage">
@@ -98,6 +116,6 @@
   </section>
 </main>
 
-<script src="/static/app.js?v=1"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

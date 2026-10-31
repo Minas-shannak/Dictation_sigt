@@ -75,6 +75,7 @@ const state = {
   index: 0,          // current line
   player: null,
   playerReady: false,
+  playerRunning: false, // frames advancing (not paused, not buffering)
   watch: null,       // { from, to, armed } while a line is playing
   rafId: 0,
   lineFinished: false, // the current line played to its end (Enter then replays it)
@@ -121,22 +122,28 @@ async function loadVideo(url, lang) {
     return;
   }
   if (!body.lines.length) { $("loadError").textContent = "The captions for this video are empty."; return; }
+  startPractice(body, lang, (box, events) => makeYouTubePlayer(box, body.videoId, events));
+}
 
-  state.data = body;
-  state.rec = videoRecord(body.videoId);
-  state.rec.lineCount = body.lines.length;
+// data: { videoId, lines: [{start, duration, text}] }; makePlayer(container, events) -> player.
+function startPractice(data, lang, makePlayer, info = {}) {
+  state.data = data;
+  state.rec = videoRecord(data.videoId);
+  if (info.title) state.rec.title = info.title;
+  state.rec.lineCount = data.lines.length;
   state.rec.lang = lang;
   state.rec.lastOpened = Date.now();
   saveVideoRecord(state.rec);
-  state.index = Math.min(state.rec.lineIndex, body.lines.length - 1);
+  state.index = Math.min(state.rec.lineIndex, data.lines.length - 1);
 
   $("loadScreen").classList.add("hidden");
   $("practiceScreen").classList.remove("hidden");
-  $("videoTitle").textContent = state.rec.title || body.videoId;
+  $("videoTitle").textContent = state.rec.title || data.videoId;
+  $("asrInfo").textContent = info.asr || "";
   renderOffset();
   renderStats(null);
   renderMissed();
-  createPlayer(body.videoId);
+  createPlayer(makePlayer);
   showLine(state.index);
   focusTyper();
 }
@@ -150,12 +157,14 @@ function renderRecent() {
     const li = document.createElement("li");
     const avg = videoAverages(rec);
     li.innerHTML = `<span class="title"></span><span class="muted"></span><span class="muted"></span>`;
+    const local = rec.id.startsWith("local:");
     li.children[0].textContent = rec.title || rec.id;
-    li.children[1].textContent = `line ${rec.lineIndex + 1} of ${rec.lineCount}`;
+    li.children[1].textContent = rec.expired ? "file expired, upload it again" : `line ${rec.lineIndex + 1} of ${rec.lineCount}`;
     li.children[2].textContent = avg.acc === null ? "no stats yet" : `${avg.acc}% accuracy`;
     li.addEventListener("click", () => {
-      $("urlInput").value = `https://www.youtube.com/watch?v=${rec.id}`;
       $("langInput").value = rec.lang || "en";
+      if (local) { openLocalVideo(rec); return; }
+      $("urlInput").value = `https://www.youtube.com/watch?v=${rec.id}`;
       loadVideo(rec.id, rec.lang || "en");
     });
     list.appendChild(li);
@@ -165,7 +174,8 @@ renderRecent();
 
 $("backBtn").addEventListener("click", () => {
   stopWatching();
-  if (state.player) { state.player.destroy(); state.player = null; state.playerReady = false; }
+  if (state.player) { state.player.destroy(); state.player = null; state.playerReady = false; state.playerRunning = false; }
+  $("asrInfo").textContent = "";
   renderPlayPause(false);
   $("player").replaceWith(Object.assign(document.createElement("div"), { id: "player" }));
   $("playerError").classList.add("hidden");
@@ -174,7 +184,205 @@ $("backBtn").addEventListener("click", () => {
   renderRecent();
 });
 
-// ---- YouTube player ---------------------------------------------------------------------
+// ---- Local videos ------------------------------------------------------------------------
+// Upload, then poll the transcription job (about once a second). Converting a format the
+// browser can't play is a separate job. The server runs jobs one at a time.
+const STAGES = {
+  uploading: "Uploading",
+  opening: "Opening",
+  queued: "Waiting for another video to finish",
+  extracting_audio: "Extracting audio",
+  loading_model: "Loading the AI model (first run only, can take a while)",
+  transcribing: "Transcribing audio",
+  processing: "Processing transcript",
+  preparing: "Preparing dictation exercises",
+  converting: "Converting the video",
+};
+const local = { video: null, job: null, convertJob: null, transcript: null, xhr: null };
+
+$("fileInput").addEventListener("change", () => {
+  const file = $("fileInput").files[0];
+  $("fileInput").value = "";
+  if (file) uploadVideo(file);
+});
+
+function uploadVideo(file) {
+  resetProcessing(file.name);
+  const form = new FormData();
+  form.append("file", file);
+  form.append("language", $("langInput").value.trim());
+  const xhr = new XMLHttpRequest();
+  local.xhr = xhr;
+  xhr.open("POST", "/api/uploads");
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) renderProc("uploading", e.loaded / e.total); };
+  xhr.onload = () => {
+    local.xhr = null;
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status !== 200) { processingError(body.message || `Upload failed (${xhr.status}).`); return; }
+    startLocalJob(body);
+  };
+  xhr.onerror = () => { local.xhr = null; processingError("Could not reach the local server. Is `python app.py` running?"); };
+  xhr.send(form);
+}
+
+// Recent videos: a stored upload is opened again through the server (it may have expired).
+async function openLocalVideo(rec) {
+  $("loadError").textContent = "";
+  let res, body;
+  try {
+    res = await fetch(`/api/local/${encodeURIComponent(rec.id)}/open`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: $("langInput").value.trim() }),
+    });
+    body = await res.json();
+  } catch {
+    $("loadError").textContent = "Could not reach the local server. Is `python app.py` running?";
+    return;
+  }
+  if (!res.ok) {
+    if (body.error === "expired" || body.error === "not_found") { rec.expired = true; saveVideoRecord(rec); renderRecent(); }
+    $("loadError").textContent = body.message || "This video could not be opened.";
+    return;
+  }
+  if (rec.expired) { rec.expired = false; saveVideoRecord(rec); }
+  resetProcessing(rec.title || body.video.original_filename, "opening");
+  startLocalJob(body);
+}
+
+function startLocalJob(body) {
+  local.video = body.video;
+  local.transcript = null;
+  local.convertJob = null;
+  local.job = body.job.id;
+  renderCodecWarning();
+  pollJob(body.job.id, onTranscribeStatus);
+}
+
+function pollJob(id, onStatus) {
+  const tick = async () => {
+    if (local.job !== id && local.convertJob !== id) return;  // cancelled or replaced
+    let res, st;
+    try { res = await fetch(`/api/jobs/${id}`); st = await res.json(); }
+    catch { processingError("Lost contact with the local server."); return; }
+    if (!res.ok) { processingError(st.message); return; }
+    onStatus(st);
+    if (!["done", "failed", "cancelled"].includes(st.state)) setTimeout(tick, 1000);
+  };
+  tick();
+}
+
+function onTranscribeStatus(st) {
+  if (st.state === "queued") renderProc("queued", null, st.queue_position ? ` (${st.queue_position} ahead)` : "");
+  else if (st.state === "running") renderProc(st.stage || "extracting_audio", st.stage === "transcribing" ? st.progress : null);
+  if (st.device) {
+    $("procDevice").textContent = st.from_cache ? "loaded from cache"
+      : st.device === "cpu" ? `CPU (${st.compute_type})` : `GPU (${st.device}, ${st.compute_type})`;
+    $("procCpu").classList.toggle("hidden", st.device !== "cpu" || st.from_cache || st.state !== "running");
+  }
+  if (st.state === "done") { local.job = null; local.transcript = st.result; maybeStartLocal(); }
+  else if (st.state === "failed") processingError(st.error.message);
+  else if (st.state === "cancelled") processingError("Cancelled.");
+}
+
+function renderCodecWarning() {
+  const v = local.video;
+  $("procCodec").classList.toggle("hidden", v.browser_playable);
+  $("procCodecText").textContent = `This video's format (${v.video_codec}) may not play in the browser. ` +
+    "Its audio is transcribed anyway; convert it to practice with the video.";
+  $("convertBtn").disabled = !!local.convertJob;
+}
+
+$("convertBtn").addEventListener("click", async () => {
+  let res, body;
+  try {
+    res = await fetch(`/api/local/${encodeURIComponent(local.video.video_id)}/convert`, { method: "POST" });
+    body = await res.json();
+  } catch { $("convertStatus").textContent = "Could not reach the local server."; return; }
+  if (!res.ok) { $("convertStatus").textContent = body.message; return; }
+  local.convertJob = body.job.id;
+  renderCodecWarning();
+  pollJob(body.job.id, onConvertStatus);
+});
+
+function onConvertStatus(st) {
+  const pct = st.progress === null ? "" : ` ${Math.round(st.progress * 100)}%`;
+  if (st.state === "queued") $("convertStatus").textContent = "Waiting to convert…";
+  else if (st.state === "running") $("convertStatus").textContent = `Converting…${pct}`;
+  else if (st.state === "done") {
+    local.convertJob = null;
+    local.video = st.result;
+    $("convertStatus").textContent = "";
+    renderCodecWarning();
+    maybeStartLocal();
+  } else {
+    local.convertJob = null;
+    $("convertStatus").textContent = st.state === "cancelled" ? "Conversion cancelled." : st.error.message;
+    renderCodecWarning();
+  }
+}
+
+// Practice starts when the transcript is ready and the browser can play the video.
+function maybeStartLocal() {
+  const t = local.transcript;
+  if (!t) return;
+  if (!local.video.browser_playable) {
+    renderProc(null, null, local.convertJob ? "Transcript ready. Waiting for the conversion…"
+      : "Transcript ready. Convert the video to practice with it.");
+    return;
+  }
+  const data = {
+    videoId: t.video_id, lang: t.language, source: "audio",
+    lines: t.sentences.map((st) => ({ id: st.index, start: st.start, duration: st.end - st.start, text: st.text })),
+  };
+  const asr = `${t.model} · ${t.device === "cpu" ? "CPU" : "GPU"} ${t.compute_type}`;
+  $("processing").classList.add("hidden");
+  startPractice(data, $("langInput").value.trim(),
+    (box, events) => makeHtml5Player(box, `/media/${encodeURIComponent(t.video_id)}`, events),
+    { title: local.video.original_filename, asr });
+}
+
+$("cancelBtn").addEventListener("click", () => {
+  if (local.xhr) local.xhr.abort();
+  for (const id of [local.job, local.convertJob]) {
+    if (id) fetch(`/api/jobs/${id}/cancel`, { method: "POST" }).catch(() => {});
+  }
+  local.job = local.convertJob = local.xhr = null;
+  processingError("Cancelled.");
+});
+
+function resetProcessing(title, stage = "uploading") {
+  $("loadError").textContent = "";
+  $("procTitle").textContent = title;
+  $("procDevice").textContent = "";
+  $("procCpu").classList.add("hidden");
+  $("procCodec").classList.add("hidden");
+  $("convertStatus").textContent = "";
+  renderProc(stage, stage === "uploading" ? 0 : null);
+  $("processing").classList.remove("hidden");
+}
+
+// stage: a STAGES key (or null for just `extra`); fraction: 0..1, or null when unknown.
+function renderProc(stage, fraction, extra = "") {
+  const pct = fraction === null || fraction === undefined ? "" : ` ${Math.round(fraction * 100)}%`;
+  $("procStage").textContent = (stage ? STAGES[stage] || stage : "") + pct + extra;
+  $("procFill").classList.toggle("indeterminate", stage !== null && (fraction === null || fraction === undefined));
+  $("procFill").style.width = fraction === null || fraction === undefined ? "" : `${fraction * 100}%`;
+}
+
+function processingError(message) {
+  local.job = local.convertJob = null;
+  $("processing").classList.add("hidden");
+  $("loadError").textContent = message;
+}
+
+// ---- Players ---------------------------------------------------------------------------
+// The dictation engine uses one small interface, whatever the video source:
+//   play(), pause(), seekTo(seconds), getCurrentTime(), getDuration(), isPlaying(),
+//   setRate(rate), destroy()
+// and reports through events: onReady(title), onPlayingChange(playing, running), onError(message).
+// "playing" includes buffering (for the play/pause icon); "running" means frames are actually
+// advancing (the clock that keeps playback time out of the typing time).
 let ytApiReady = new Promise((resolve) => { window.onYouTubeIframeAPIReady = resolve; });
 (function loadYouTubeApi() {
   const s = document.createElement("script");
@@ -182,50 +390,98 @@ let ytApiReady = new Promise((resolve) => { window.onYouTubeIframeAPIReady = res
   document.head.appendChild(s);
 })();
 
-async function createPlayer(videoId) {
+async function makeYouTubePlayer(container, videoId, events) {
   await ytApiReady;
-  state.playerReady = false;
-  state.player = new YT.Player("player", {
+  let yt;
+  // YouTube's own subtitles would give the answer away.
+  const hideCaptions = () => { try { yt.unloadModule("captions"); yt.unloadModule("cc"); } catch {} };
+  // Buffering right after a seek counts as playing: it's about to start.
+  const playing = (s) => s === YT.PlayerState.PLAYING || s === YT.PlayerState.BUFFERING;
+  const messages = {
+    2: "Invalid video ID.",
+    5: "This video can't be played in an HTML5 player.",
+    100: "This video was removed or is private.",
+    101: "The owner doesn't allow this video to be embedded, so it can't be played here.\nTry another video.",
+    150: "The owner doesn't allow this video to be embedded, so it can't be played here.\nTry another video.",
+  };
+  yt = new YT.Player(container, {
     videoId,
     playerVars: {
       controls: 0, disablekb: 1, rel: 0, playsinline: 1, iv_load_policy: 3,
       cc_load_policy: 0, origin: location.origin,
     },
     events: {
-      onReady: () => {
-        state.playerReady = true;
-        hideYouTubeCaptions();
-        playLine(state.index);
-        const title = state.player.getVideoData().title;
-        if (title && state.rec) {
-          state.rec.title = title;
-          saveVideoRecord(state.rec);
-          $("videoTitle").textContent = title;
-        }
-      },
+      onReady: () => { hideCaptions(); events.onReady(yt.getVideoData().title); },
       onStateChange: (e) => {
-        renderPlayPause(isPlayingState(e.data));
-        if (e.data === YT.PlayerState.PLAYING) {
-          hideYouTubeCaptions();
-          if (state.playingSince === null) state.playingSince = performance.now();
-        } else {
-          stopPlaybackClock();
-        }
+        if (e.data === YT.PlayerState.PLAYING) hideCaptions();
+        events.onPlayingChange(playing(e.data), e.data === YT.PlayerState.PLAYING);
       },
-      onError: (e) => {
-        const messages = {
-          2: "Invalid video ID.",
-          5: "This video can't be played in an HTML5 player.",
-          100: "This video was removed or is private.",
-          101: "The owner doesn't allow this video to be embedded, so it can't be played here.",
-          150: "The owner doesn't allow this video to be embedded, so it can't be played here.",
-        };
-        $("playerError").textContent = (messages[e.data] || `Player error ${e.data}.`) +
-          (e.data === 101 || e.data === 150 ? "\nTry another video." : "");
-        $("playerError").classList.remove("hidden");
-      },
+      onError: (e) => events.onError(messages[e.data] || `Player error ${e.data}.`),
     },
   });
+  return {
+    play: () => yt.playVideo(),
+    pause: () => yt.pauseVideo(),
+    seekTo: (t) => yt.seekTo(t, true),
+    getCurrentTime: () => yt.getCurrentTime(),
+    getDuration: () => yt.getDuration(),
+    isPlaying: () => playing(yt.getPlayerState()),
+    setRate: (r) => yt.setPlaybackRate(r),
+    destroy: () => yt.destroy(),
+  };
+}
+
+function makeHtml5Player(container, src, events) {
+  const video = document.createElement("video");
+  Object.assign(video, { src, preload: "auto", playsInline: true, controls: false });
+  container.appendChild(video);
+  const playing = () => !video.paused && !video.ended;
+  video.addEventListener("loadedmetadata", () => events.onReady(null), { once: true });
+  for (const name of ["playing", "pause", "ended", "waiting"]) {
+    video.addEventListener(name, () => events.onPlayingChange(playing(), name === "playing"));
+  }
+  video.addEventListener("error", () => events.onError(video.error && video.error.code === 4
+    ? "This browser can't play this video's format. Go back and use Convert."
+    : "The video could not be loaded."));
+  return {
+    play: () => { video.play().catch(() => {}); },
+    pause: () => video.pause(),
+    seekTo: (t) => { video.currentTime = t; },
+    getCurrentTime: () => video.currentTime,
+    getDuration: () => video.duration || 0,
+    isPlaying: playing,
+    setRate: (r) => { video.playbackRate = r; },
+    destroy: () => { video.pause(); video.removeAttribute("src"); video.load(); video.remove(); },
+  };
+}
+
+async function createPlayer(makePlayer) {
+  state.playerReady = false;
+  const player = await makePlayer($("player"), {
+    onReady: (title) => {
+      state.playerReady = true;
+      playLine(state.index);
+      if (title && state.rec) {
+        state.rec.title = title;
+        saveVideoRecord(state.rec);
+        $("videoTitle").textContent = title;
+      }
+    },
+    onPlayingChange: (playing, running) => {
+      renderPlayPause(playing);
+      state.playerRunning = running;
+      if (running) {
+        if (state.playingSince === null) state.playingSince = performance.now();
+      } else {
+        stopPlaybackClock();
+      }
+    },
+    onError: (message) => {
+      $("playerError").textContent = message;
+      $("playerError").classList.remove("hidden");
+    },
+  });
+  state.player = player;
 }
 
 // Playback time after the first keystroke is excluded from the line's typing time.
@@ -235,11 +491,6 @@ function stopPlaybackClock() {
   const c = state.line;
   if (c && c.firstKeyAt !== null) c.playMs += now - Math.max(state.playingSince, c.firstKeyAt);
   state.playingSince = null;
-}
-
-// YouTube's own subtitles would give the answer away.
-function hideYouTubeCaptions() {
-  try { state.player.unloadModule("captions"); state.player.unloadModule("cc"); } catch {}
 }
 
 function lineWindow(i) {
@@ -252,32 +503,29 @@ function playLine(i, rate = 1) {
   if (!state.playerReady || !state.data) return;
   const { from, to } = lineWindow(i);
   stopWatching();
-  state.player.setPlaybackRate(rate);
-  state.player.seekTo(from, true);
-  state.player.playVideo();
+  state.player.setRate(rate);
+  state.player.seekTo(from);
+  state.player.play();
   state.lineFinished = false;
   // "armed" ignores stale getCurrentTime() values reported before the seek lands.
   state.watch = { from, to, armed: false };
   state.rafId = requestAnimationFrame(watchPlayback);
 }
 
-// Buffering right after a seek counts as playing: it's about to start.
-function isPlayingState(s) { return s === YT.PlayerState.PLAYING || s === YT.PlayerState.BUFFERING; }
-
 // Enter / play button: pause if playing, continue the current line if it was paused partway,
 // otherwise replay it from the start.
 function togglePlay() {
   if (!state.playerReady) return;
-  if (isPlayingState(state.player.getPlayerState())) {
+  if (state.player.isPlaying()) {
     stopWatching();
-    state.player.pauseVideo();
+    state.player.pause();
     return;
   }
   const { from, to } = lineWindow(state.index);
   const t = state.player.getCurrentTime();
   if (state.lineFinished || t < from || t >= to) { playLine(state.index); return; }
   stopWatching();
-  state.player.playVideo();
+  state.player.play();
   state.watch = { from: t, to, armed: false };
   state.rafId = requestAnimationFrame(watchPlayback);
 }
@@ -293,7 +541,7 @@ function watchPlayback() {
   const t = state.player.getCurrentTime();
   if (!w.armed && t >= w.from - 0.05 && t < w.to) w.armed = true;
   if (w.armed && t >= w.to) {
-    state.player.pauseVideo();
+    state.player.pause();
     state.watch = null;
     state.lineFinished = true;
     return;
@@ -499,7 +747,7 @@ function recordLineStats() {
   // retyped); accuracy uses every keystroke.
   const chars = state.slots.filter((s) => s.typeable && s.how === "typed").length;
   const entry = { chars, ms: Math.round(ms), correct: c.correct, keys: c.keys };
-  if (state.player && state.player.getPlayerState && state.player.getPlayerState() === YT.PlayerState.PLAYING) {
+  if (state.playerRunning) {
     state.playingSince = performance.now();  // keep the clock running for whatever comes next
   }
   state.rec.stats[state.index] = entry;

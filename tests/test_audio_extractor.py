@@ -3,9 +3,11 @@
 import os
 import shutil
 import subprocess
+import time
 
 import pytest
 
+import services.audio_extractor as ax
 from services.audio_extractor import AudioError, extracted_audio, probe
 
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg not installed")
@@ -69,16 +71,13 @@ def test_temp_wav_is_deleted_when_the_caller_fails(media):
 
 
 def test_ffmpeg_failure_is_reported_and_cleaned_up(media, monkeypatch):
-    real_run = subprocess.run
     made = []
 
-    def failing_ffmpeg(cmd, **kw):
-        if cmd[0] == "ffmpeg":
-            made.append(cmd[-1])
-            return subprocess.CompletedProcess(cmd, 1, "", "simulated decoder error")
-        return real_run(cmd, **kw)
+    def failing_ffmpeg(args, timeout, check=None, on_time=None):
+        made.append(args[-1])
+        return 1, "simulated decoder error"
 
-    monkeypatch.setattr(subprocess, "run", failing_ffmpeg)
+    monkeypatch.setattr(ax, "run_ffmpeg", failing_ffmpeg)
     with pytest.raises(AudioError) as exc:
         with extracted_audio(media["mp4"]):
             pass
@@ -87,18 +86,86 @@ def test_ffmpeg_failure_is_reported_and_cleaned_up(media, monkeypatch):
 
 
 def test_ffmpeg_timeout_is_reported_and_cleaned_up(media, monkeypatch):
-    real_run = subprocess.run
     made = []
 
-    def slow_ffmpeg(cmd, **kw):
-        if cmd[0] == "ffmpeg":
-            made.append(cmd[-1])
-            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
-        return real_run(cmd, **kw)
+    def slow_ffmpeg(args, timeout, check=None, on_time=None):
+        made.append(args[-1])
+        raise subprocess.TimeoutExpired(args, timeout)
 
-    monkeypatch.setattr(subprocess, "run", slow_ffmpeg)
+    monkeypatch.setattr(ax, "run_ffmpeg", slow_ffmpeg)
     with pytest.raises(AudioError) as exc:
         with extracted_audio(media["mp4"]):
             pass
     assert exc.value.code == "ffmpeg_timeout"
     assert made and not os.path.exists(made[0])
+
+
+class Stop(BaseException):
+    """What a cancelled job raises from check()."""
+
+
+def test_run_ffmpeg_is_stopped_by_check_and_the_process_killed(monkeypatch):
+    calls, procs = [], []
+    real_popen = subprocess.Popen
+
+    def recording_popen(*a, **kw):
+        procs.append(real_popen(*a, **kw))
+        return procs[-1]
+
+    monkeypatch.setattr(ax.subprocess, "Popen", recording_popen)
+
+    def check():
+        calls.append(time.monotonic())
+        if len(calls) > 2:
+            raise Stop()
+
+    t0 = time.monotonic()
+    with pytest.raises(Stop):
+        # An hour of audio generated at real-time speed (-re) would run for an hour.
+        ax.run_ffmpeg(["-re", "-f", "lavfi", "-i", "sine=duration=3600", "-f", "null", "-"], timeout=60, check=check)
+    assert time.monotonic() - t0 < 5
+    assert len(procs) == 1 and procs[0].poll() is not None  # the ffmpeg process is gone
+
+
+def test_cancelled_extraction_removes_the_temp_wav(media, monkeypatch):
+    made = []
+    real = ax.run_ffmpeg
+
+    def spy(args, timeout, check=None, on_time=None):
+        made.append(args[-1])
+        return real(args, timeout, check, on_time)
+
+    def check():
+        raise Stop()
+
+    monkeypatch.setattr(ax, "run_ffmpeg", spy)
+    with pytest.raises(Stop):
+        with extracted_audio(media["mp4"], check=check):
+            pass
+    assert made and not os.path.exists(made[0])
+
+
+def test_convert_makes_an_h264_mp4_with_progress(media, tmp_path):
+    hevc = str(tmp_path / "hevc.mov")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *VIDEO, *TONE, "-shortest", "-c:v", "libx265", "-tag:v", "hvc1",
+                    "-c:a", "aac", hevc], check=True, capture_output=True)
+    assert not probe(hevc).browser_playable
+    dest = str(tmp_path / "out.mp4")
+    progress = []
+    ax.convert_for_browser(hevc, dest, on_progress=progress.append)
+    out = probe(dest)
+    assert (out.video_codec, out.audio_codec, out.browser_playable) == ("h264", "aac", True)
+    assert out.duration == pytest.approx(2.0, abs=0.2)
+    assert progress and progress[-1] == 1.0 and progress == sorted(progress)
+    assert sorted(os.listdir(tmp_path)) == ["hevc.mov", "out.mp4"]  # no temp file left
+
+
+def test_cancelled_convert_leaves_nothing(media, tmp_path):
+    dest = str(tmp_path / "out.mp4")
+
+    def check():
+        raise Stop()
+
+    with pytest.raises(Stop):
+        ax.convert_for_browser(media["mov"], dest, check=check)
+    assert os.listdir(tmp_path) == []

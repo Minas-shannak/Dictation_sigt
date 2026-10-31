@@ -144,3 +144,20 @@ AUDIO_SAMPLE_RATE = 16000            # what Whisper expects
 # Video codecs Chrome plays natively; anything else (HEVC, ProRes, ...) gets a
 # warning and an offer to convert.
 BROWSER_PLAYABLE_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1"}
+# "Convert" (on request only) re-encodes to H.264 + AAC MP4.
+FFMPEG_CONVERT_TIMEOUT_SECONDS = 4 * 60 * 60
+CONVERT_X264_PRESET = "veryfast"
+CONVERT_X264_CRF = 23
+CONVERT_AUDIO_BITRATE = "160k"
+
+# --- Local uploads (services/uploads.py) ---------------------------------------
+UPLOAD_DIR = BASE_DIR / "uploads"
+MAX_UPLOAD_BYTES = 2 * 1024 ** 3                    # 2 GB; Flask rejects larger requests before saving
+ALLOWED_UPLOAD_EXTENSIONS = {".mp4", ".m4v", ".mov", ".webm"}
+# ffprobe container names accepted (checked on the content, not the extension).
+ALLOWED_CONTAINERS = {"mov,mp4,m4a,3gp,3g2,mj2", "matroska,webm"}
+UPLOAD_RETENTION_DAYS = 30                          # delete a video not opened for this long (transcripts stay)
+RETENTION_CHECK_SECONDS = 24 * 60 * 60              # cleanup at startup, then once a day
+
+# --- Background jobs (services/jobs.py) ---------------------------------------
+FINISHED_JOBS_KEPT = 50                             # finished jobs stay queryable until this many newer ones finish

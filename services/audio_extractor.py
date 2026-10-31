@@ -1,22 +1,30 @@
-"""Probe media files with ffprobe and extract 16 kHz mono WAV audio with FFmpeg.
+"""Probe media files with ffprobe, extract 16 kHz mono WAV audio and convert videos with FFmpeg.
 
 The extracted WAV is a temporary file that exists only inside the
-`extracted_audio()` context and is deleted afterwards, even on failure.
+`extracted_audio()` context and is deleted afterwards, even on failure or
+cancellation.
+
+Long FFmpeg runs take an optional `check()` callback, called about twice a
+second; it stops the run by raising (the job system uses this to cancel).
 """
 
 import json
 import logging
 import os
+import selectors
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional, Tuple
 
 import config
 
 log = logging.getLogger(__name__)
+
+Check = Callable[[], None]
 
 
 class AudioError(Exception):
@@ -83,27 +91,120 @@ def probe(path: str) -> ProbeResult:
     return result
 
 
+def run_ffmpeg(args: list, timeout: float, check: Optional[Check] = None,
+               on_time: Optional[Callable[[float], None]] = None) -> Tuple[int, str]:
+    """Run ffmpeg with `args`; returns (exit code, stderr).
+
+    check() is called about twice a second and may raise to stop the run (the process
+    is killed). on_time(seconds) receives the output position, for progress.
+    Raises subprocess.TimeoutExpired after `timeout` seconds.
+    """
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y"]
+    if on_time:
+        cmd += ["-progress", "pipe:1", "-nostats"]
+    cmd += args
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE if on_time else subprocess.DEVNULL, stderr=err)
+        deadline = time.monotonic() + timeout
+        try:
+            selector = None
+            if on_time:
+                selector = selectors.DefaultSelector()
+                selector.register(proc.stdout, selectors.EVENT_READ)
+            while True:
+                if check:
+                    check()
+                if time.monotonic() > deadline:
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                if selector is None:
+                    try:
+                        proc.wait(timeout=0.5)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+                if not selector.select(timeout=0.5):
+                    continue
+                line = proc.stdout.readline()
+                if not line:  # ffmpeg closed its output: it is finishing
+                    proc.wait()
+                    break
+                key, _, value = line.decode(errors="replace").strip().partition("=")
+                if key == "out_time_us" and value.isdigit():
+                    on_time(int(value) / 1e6)
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+        err.seek(0)
+        return proc.returncode, err.read().decode(errors="replace").strip()
+
+
 @contextmanager
-def extracted_audio(path: str) -> Iterator[str]:
+def extracted_audio(path: str, check: Optional[Check] = None) -> Iterator[str]:
     """Yield the path of a temporary 16 kHz mono WAV of the file's audio, deleted on exit."""
     probe(path)
     fd, wav_path = tempfile.mkstemp(prefix="dictation-audio-", suffix=".wav")
     os.close(fd)
     try:
-        cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path),
-               "-vn", "-ac", "1", "-ar", str(config.AUDIO_SAMPLE_RATE), "-c:a", "pcm_s16le", wav_path]
+        args = ["-i", str(path), "-vn", "-ac", "1", "-ar", str(config.AUDIO_SAMPLE_RATE), "-c:a", "pcm_s16le", wav_path]
         try:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=config.FFMPEG_TIMEOUT_SECONDS)
+            code, stderr = run_ffmpeg(args, config.FFMPEG_TIMEOUT_SECONDS, check)
         except subprocess.TimeoutExpired:
             log.error("ffmpeg timed out after %ss extracting audio from %s", config.FFMPEG_TIMEOUT_SECONDS, path)
             raise AudioError("ffmpeg_timeout", "Extracting the audio took too long and was stopped.")
-        if out.returncode != 0 or Path(wav_path).stat().st_size == 0:
-            log.error("ffmpeg failed extracting audio from %s (exit %s): %s", path, out.returncode, out.stderr.strip())
+        if code != 0 or Path(wav_path).stat().st_size == 0:
+            log.error("ffmpeg failed extracting audio from %s (exit %s): %s", path, code, stderr)
             raise AudioError("ffmpeg_failed", "Could not extract the audio from this video.")
         log.info("Extracted audio from %s to %s (%d bytes)", path, wav_path, Path(wav_path).stat().st_size)
         yield wav_path
     finally:
         try:
             os.remove(wav_path)
+        except FileNotFoundError:
+            pass
+
+
+def convert_for_browser(src: str, dest: str, check: Optional[Check] = None,
+                        on_progress: Optional[Callable[[float], None]] = None) -> None:
+    """Transcode a video to H.264 + AAC MP4 (plays in every browser) at `dest`.
+
+    Writes to a temporary file next to `dest` and renames it only after the result
+    probes as a playable H.264 video of the same length; on any failure or
+    cancellation the temporary file is removed and `dest` is untouched.
+    """
+    source = probe(src)
+    tmp = f"{dest}.converting.mp4"
+    args = ["-i", str(src), "-map", "0:v:0", "-map", "0:a:0",
+            "-c:v", "libx264", "-preset", config.CONVERT_X264_PRESET, "-crf", str(config.CONVERT_X264_CRF),
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", config.CONVERT_AUDIO_BITRATE,
+            "-movflags", "+faststart", tmp]
+
+    def on_time(seconds: float) -> None:
+        if on_progress and source.duration > 0:
+            on_progress(min(1.0, seconds / source.duration))
+
+    try:
+        try:
+            code, stderr = run_ffmpeg(args, config.FFMPEG_CONVERT_TIMEOUT_SECONDS, check, on_time)
+        except subprocess.TimeoutExpired:
+            log.error("ffmpeg timed out after %ss converting %s", config.FFMPEG_CONVERT_TIMEOUT_SECONDS, src)
+            raise AudioError("ffmpeg_timeout", "Converting the video took too long and was stopped.")
+        if code != 0:
+            log.error("ffmpeg failed converting %s (exit %s): %s", src, code, stderr)
+            raise AudioError("convert_failed", "Could not convert this video.")
+        result = probe(tmp)
+        if result.video_codec != "h264" or abs(result.duration - source.duration) > 2.0:
+            log.error("Converted file %s is not as expected: %s (source %.1fs)", tmp, result, source.duration)
+            raise AudioError("convert_failed", "Could not convert this video.")
+        os.replace(tmp, dest)
+        log.info("Converted %s to %s (H.264 + AAC, %.1fs)", src, dest, result.duration)
+        if on_progress:
+            on_progress(1.0)
+    finally:
+        try:
+            os.remove(tmp)
         except FileNotFoundError:
             pass

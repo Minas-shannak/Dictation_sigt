@@ -10,8 +10,8 @@ Update this file at the end of every phase. Commit after every phase.
 | 1. Inspect the project | Done, approved. Decisions recorded in PLAN.md section 0.1 |
 | 2. Audio extraction and AI transcription | Done, approved |
 | 3. Transcript processing | Done, approved; follow-ups done. Model decided: large-v3 + prompt, VAD off |
-| 4. Unified format and caching | Done, **waiting for review** |
-| 5. Background jobs and local upload | Not started |
+| 4. Unified format and caching | Done |
+| 5. Background jobs and local upload | Done, **waiting for review** |
 | 6. Replace the YouTube caption pipeline | Not started |
 | 7. Integrate with the dictation engine | Not started |
 | 8. Test and fix regressions | Not started |
@@ -619,3 +619,90 @@ The user listened to the movie clip (cpbARmnt_nU, 00:00–05:00):
 - So large-v3 is best on clean speech (conversation 3.8%, numbers 4.0%) but loses dialogue under music, which the filter cannot recover. The model is part of the layer-1 key, so this does not block Phase 5. **The model decision should be revisited with this in mind.**
 
 pytest: 162 passed.
+
+## Phase 5: Background jobs and local upload (Oct 31, 2026)
+
+### Done
+**Backend**
+- **`services/jobs.py`:** one worker thread, an in-memory queue, jobs run one at a time.
+  - **Status:** `state` (queued/running/done/failed/cancelled), `stage`, `progress`, `device`, `compute_type`, `from_cache`, a friendly `error`, `queue_position`, and `result` once done.
+  - **Duplicates:** submitting the same key (same video and language, or the same conversion) while queued or running returns the existing job.
+  - **Cancellation:** `JobCancelled` is a BaseException raised from the job's `check()`, `set_stage()` and `set_progress()`. The transcriber's `except Exception` lets it through, and every `finally` still runs, so temp audio is deleted and no cache entry is written.
+  - **Errors:** known errors show their message; anything else shows a generic one, with the traceback in the log.
+  - **History:** finished jobs are forgotten after 50. A server restart loses jobs; there are no partial cache files thanks to the atomic writes.
+- **`services/audio_extractor.py`:**
+  - `run_ffmpeg()` replaces `subprocess.run`. It checks for cancellation about twice a second (killing FFmpeg), enforces the timeout, sends stderr to the log, and can report progress (`-progress pipe:1`).
+  - `extracted_audio(path, check)` is cancellable.
+  - New `convert_for_browser()`: H.264 (veryfast, CRF 23) + AAC MP4 with faststart, with progress. It writes a temp file and renames it only after the result probes as H.264 of the same length; on failure or cancel nothing is left.
+- **`services/uploads.py`:**
+  - **Checks:** the extension (`.mp4 .m4v .mov .webm`), then the **content** with ffprobe (container mov/mp4 or matroska/webm, has audio, has video, non-zero length).
+  - **Size:** 2 GB. Flask's `MAX_CONTENT_LENGTH` refuses larger requests **before saving**, with a JSON message giving the limit.
+  - **Storage:** the file is hashed with SHA-256 while it is saved (read once) and stored as `uploads/<sha256><ext>`. `secure_filename` is applied to the display name only, so names can't reach the path.
+  - **Index:** `uploads/index.json` holds the original name, codecs, browser playability, `converted` and `last_opened`. The same content gets the same entry and video_id.
+  - **Retention:** files not opened for 30 days are deleted at startup and daily. The entry stays as `expired`, and the transcripts stay in the cache. Leftover `incoming-*.part` / `*.converting.mp4` files are removed at startup, or after a day while running.
+  - **Convert:** `replace_with_converted()` swaps in the converted MP4, deletes the original (no duplicate) and keeps the video_id (hash of the original), so cached transcripts still match.
+- **`app.py` routes** (thin, calling services):
+  - `POST /api/uploads` (file + language) → video info + job
+  - `POST /api/local/<id>/open` → resets the retention clock and returns the transcript job; 410 if expired
+  - `POST /api/local/<id>/convert`
+  - `GET /api/jobs/<id>`, `POST /api/jobs/<id>/cancel`
+  - `GET /media/<id>` (HTTP Range support for seeking)
+  - The retention thread starts with the server. The caption route is unchanged (Phase 6).
+- **`ai/transcriber.current_device()`** lets jobs report the device in use as soon as transcription starts, including after a CPU fallback.
+
+**Frontend**
+- **Shared player interface** in `static/app.js`: `play, pause, seekTo, getCurrentTime, getDuration, isPlaying, setRate, destroy` + events `onReady(title)`, `onPlayingChange(playing, running)`, `onError(message)`.
+  - `makeYouTubePlayer` holds all YouTube-specific code, including hiding captions.
+  - `makeHtml5Player` uses a `<video>` element.
+  - The dictation engine (`playLine`, `togglePlay`, `watchPlayback`, stats clock, time display) only uses the interface. "running" keeps the old stats behavior (buffering doesn't count as playback time).
+  - Fullscreen covers the whole app, so it works for both.
+- **Upload flow:**
+  - an "Upload a video…" button and a processing panel showing each stage (Uploading %, Waiting, Extracting audio, Loading the AI model, Transcribing %, Processing, Preparing)
+  - the device ("GPU (cuda, float16)", "CPU (int8)", "loaded from cache"); during CPU transcription, **"Running on CPU, this will be slow."**
+  - Cancel
+- **Codec check:** if the browser can't play the video, the panel says so and offers **Convert**. Transcription doesn't wait. Practice starts when the transcript is ready **and** the video is playable.
+- **Shared start path:** `startPractice()` is shared by YouTube and local videos. A small adapter turns the unified transcript into the engine's current `{videoId, lines}`. The practice header shows the model and device ("large-v3 · GPU float16").
+- **Recent videos:** a local entry reopens through the server (cache hit). If expired, it shows the server's message, and the entry reads "file expired, upload it again".
+- Asset versions bumped to `?v=2`.
+
+### Files changed
+- New: `services/jobs.py`, `services/uploads.py`, `tests/test_jobs.py`, `tests/test_uploads_api.py`.
+- Changed: `services/audio_extractor.py`, `ai/transcriber.py`, `app.py`, `config.py`, `index.html`, `static/app.js`, `static/style.css`, `tests/test_audio_extractor.py`, `README.md`, `docs/PROGRESS.md`.
+
+### Tests run (real results)
+- **pytest: 194 passed**, on three consecutive runs. That is 160 + 34 new:
+  - **jobs (9):** result and status; one at a time in order; duplicates; queue position and cancelling a queued job; a running job stops at its next check and cleans up; cancellation passes through `except Exception`; friendly vs generic errors; history limit; refused cancels
+  - **extractor (5 new):** FFmpeg killed by `check()` within 5 s; cancelled extraction removes the temp WAV; HEVC→H.264 conversion with monotonic progress ending at 1.0 and no temp left; cancelled conversion leaves nothing
+  - **upload API (20, real FFmpeg, fake transcription):**
+    - storage and job: content-hash storage, transcription job, the same file under another name stored once, path traversal in the name contained
+    - rejections (each leaving nothing behind): wrong extension, corrupt content, no audio, audio only (no video)
+    - limits and serving: too large → 413 with "2 GB limit" before saving; missing file field; Range requests (206); unknown or malicious IDs → 404
+    - conversion: HEVC flagged, Convert replaces it with H.264 keeping the ID, original deleted; a cancelled conversion keeps the original
+    - jobs and retention: job endpoints; retention (29 days kept, opening resets the clock, 31 days deleted with the transcript cache kept, 410 "Upload it again", re-upload revives it); startup cleanup of interrupted uploads
+- **Browser** (headless Firefox, server with scratch upload/cache folders; the user's real `uploads/` and `cache/` untouched):
+  - **Upload `jfk.mp4`:** practice in 6.9 s on GPU (all stages shown, "GPU (cuda, float16)"). Two sentences, video served from `/media/local:…`.
+  - **HTML5 playback through the interface:** the line auto-paused at its end; Enter worked when finished (replay), playing (pause) and paused partway (resume, then stop at line end); typing and Backspace worked; the time display read "00:07 / 00:11".
+  - **Recent videos:** reopened from the cache in 0.2 s ("loaded from cache").
+  - **Broken file:** "This file is corrupted or not a supported video format."
+  - **HEVC `.mov`:** codec warning, then "Transcript ready. Convert the video to practice with it." After Convert, practice started 1.1 s later and the converted video played to the line end with no player error.
+  - **YouTube regression** (caption pipeline through the new YouTube adapter): loaded, auto-paused at line end, Enter played.
+  - **Expiry:** after a 31-day cleanup both video files were removed (2 transcripts kept). Clicking the entry showed "This video file has expired (not opened for 30 days). Upload it again.", and the entry read "file expired, upload it again".
+  - **Browser console:** no errors (only YouTube's cookie warnings).
+- **Real CPU path** (second server with `CUDA_VISIBLE_DEVICES=""`, browser upload of `jfk.mp4`):
+  - the panel showed "Transcribing audio", "CPU (int8)" and **"Running on CPU, this will be slow."**
+  - practice after 13.2 s, header "large-v3 · CPU int8"
+  - server log: "No CUDA device available; using the CPU", model on cpu (int8)
+- **Real cancellation on the GPU** (4-minute video via curl): cancelled at 11% of transcription. The job reported `cancelled` 0.86 s later, with no layer-1 cache entry written and no temp WAV left in `/tmp`.
+- **Syntax:** Python 3.10 parse of all files OK, and `node --check static/app.js` OK.
+
+### Not done / limitations
+- **Cancel delays:**
+  - During the **model load** (seconds; the first download takes minutes), cancel waits until loading finishes.
+  - During **transcription**, cancel takes effect at the next decoded segment (about 1 s on GPU; on CPU one 30 s window can take about 11 s).
+- **Uploads:** the upload itself runs inside the HTTP request (the file transfer). Cancel aborts it in the browser, and any partial `.part` is removed at the next startup or after a day.
+- **Deferred to Phase 7** (left as before, not changed here):
+  - the engine still uses the old `lines` format through an adapter, and the old padding (0.2 / 0.15 s)
+  - no `play_start` and no clamping
+  - saved progress not yet tied to `transcript_version`
+  - the old-data migration
+- **Phase 6:** YouTube still uses captions. The Deno/yt-dlp audio service and removing captions are next.

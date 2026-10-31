@@ -59,7 +59,8 @@ memory. Without a working GPU the same model runs on the CPU, which is much slow
 python app.py
 ```
 
-Open http://localhost:8000 in Chrome, paste a YouTube link and press **Load**.
+Open http://localhost:8000 in Chrome, paste a YouTube link and press **Load**, or press
+**Upload a video…** to practise with a video file of your own (MP4, MOV or WebM, up to 2 GB).
 
 Run the tests with `pytest`.
 
@@ -79,6 +80,8 @@ Run the tests with `pytest`.
   `python tests/tools/evaluate_fixtures.py` compares every fixture against them
 - `services/audio_extractor.py`: checks media with ffprobe and extracts 16 kHz mono audio with FFmpeg
 - `services/transcript_cache.py`: builds the unified transcript for a video and caches it in two layers
+- `services/jobs.py`: runs transcriptions and conversions in the background, one at a time, with progress and cancel
+- `services/uploads.py`: stores uploaded videos (`uploads/`, named by content hash) and deletes ones not opened for 30 days
 - `tests/`: pytest tests (run `pytest`)
 - `docs/`: the plan for the audio-based pipeline and the progress log
 - `cache/`: `asr/` holds raw speech recognition results (rebuilt only when the model or recognition settings
@@ -103,6 +106,14 @@ After editing `style.css` or `app.js`, bump the version in its link in `index.ht
 - Use **Offset** (−0.5 s to +0.5 s) if a video's captions are slightly early or late. It's saved per video.
 - The theme follows your system's light/dark setting. The 🌙/☀️ button in the corner overrides it, and the choice is remembered.
 - Progress, offset, stats and missed words are stored in the browser's localStorage, per video.
+- **Uploaded videos** are checked (type, content, size), stored in `uploads/` and transcribed from their own audio
+  in the background. The panel shows each step with real progress and whether the GPU or the CPU is used
+  ("Running on CPU, this will be slow" if the GPU can't be used); **Cancel** stops it. Uploading the same file
+  again, or opening it from Recent videos, reuses the cached transcript.
+- Some formats (HEVC/H.265, ProRes) don't play in browsers. The panel then offers **Convert**, which re-encodes the
+  video to H.264 in the background and replaces the stored file; the audio is transcribed either way.
+- An uploaded video not opened for 30 days is deleted to save space (its transcript is kept). Recent videos
+  then shows "file expired, upload it again".
 
 ## Keyboard shortcuts
 

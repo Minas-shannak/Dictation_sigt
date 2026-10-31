@@ -192,6 +192,12 @@ def _run(model, audio_path: str, language: Optional[str], on_progress: Optional[
     return info, segments
 
 
+def current_device() -> Tuple[Optional[str], Optional[str]]:
+    """(device, compute_type) of the loaded model, or (None, None) before the first load."""
+    key = _model_key
+    return (key[1], key[2]) if key else (None, None)
+
+
 def asr_settings(language: Optional[str] = config.DEFAULT_LANGUAGE) -> Dict:
     """The recognition settings a transcription would use: recorded in every raw result,
     and part of the cache key (a change means retranscribing). The model is keyed separately."""
