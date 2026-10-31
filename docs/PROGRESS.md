@@ -12,8 +12,8 @@ Update this file at the end of every phase. Commit after every phase.
 | 3. Transcript processing | Done, approved; follow-ups done. Model decided: large-v3 + prompt, VAD off |
 | 4. Unified format and caching | Done |
 | 5. Background jobs and local upload | Done, approved |
-| 6. Replace the YouTube caption pipeline | Done, **waiting for review** |
-| 7. Integrate with the dictation engine | Not started |
+| 6. Replace the YouTube caption pipeline | Done, approved |
+| 7. Integrate with the dictation engine | **In progress** (see below) |
 | 8. Test and fix regressions | Not started |
 
 ## Phase 1: Inspection (Oct 31, 2026)
@@ -830,3 +830,36 @@ Sentences marked unclear at each threshold:
 
 ### Not done / next (Phase 7)
 - The engine still uses the old `lines` format through the adapter, and the old padding (0.2 / 0.15 s). Still to come: `play_start`, clamping, the clarity badge and the stats rule for skipped unclear sentences, progress tied to `transcript_version`, and the clean-start migration (back up and clear old localStorage records and the old caption cache).
+
+## Phase 7: in progress (Nov 1, 2026), stopped at the usage limit
+
+### Done
+- **Decisions applied:**
+  - `SENTENCE_CLARITY_MIN = 0.8`, which also marks misheard lines.
+  - `INITIAL_PROMPT = ""`; the prompt-leak filter is kept.
+  - PLAN.md 0.1 (items 10 and 15), 6A and the section 11 example updated.
+- **Main fixtures** re-transcribed with the defaults (large-v3-turbo, no prompt, VAD off). The turbo + prompt ones moved to `experiments/*_turbo_prompt.json`, and the old experiment-C turbo runs (same settings) were removed. WER: conversation 4.9%, movie 11.9%, numbers 3.9%. Song: nothing excluded (no prompt to leak). Silence: "Thank you." excluded.
+- **`play_start` (layer 2)** is implemented. A sentence whose first word is longer than `STRETCHED_FIRST_WORD_SECONDS` (1.0) gets `play_start = word end − 1.0`. It is never earlier than `start`, stored timestamps are unchanged, and each adjustment is logged. `PROCESSING_VERSION = 7`. Tested with the real "they're" case (small movie fixture: start 271.26 → play_start 276.38; captions put the line at 277.16).
+- **Read-only inventory of the real data** (nothing modified):
+  - `cache/`: 7 old caption files. No `uploads/`.
+  - **Browser:** Firefox (no Chrome installed). Real profile `lv6td6v4.default` has localStorage for `localhost:8000`. A copy was decoded in the scratchpad (sqlite + a pure-Python snappy decoder). It holds three keys:
+    - `dictation:video:H-_Wx7VETxE` ("Frozen – Meeting Olaf Clip (HD)", line 33 of 33, stats for 32 lines, 97 missed words)
+    - `dictation:video:cpbARmnt_nU` (the Rise of the Guardians clip, line 103 of 103, stats for 103 lines, 106 missed words, offset −0.5)
+    - `dictation:sound` (volume 6, not muted)
+- **Already true in the engine:** stats are recorded only when a sentence is completed. Next/Previous never record, so skipped sentences (unclear or not) are already excluded from WPM/accuracy. This still needs an explicit test.
+
+### Left for Phase 7
+1. **Migration:**
+   - **Server** (`services/migration.py`): back up `cache/*.json` to `backup/pre-audio-pipeline-YYYYMMDD-HHMM/` with a manifest (sha256), clear them, and record a data version so it runs once.
+   - **Browser:** on first load, POST all `dictation:*` keys to the server backup folder, download a JSON copy, then clear the old bare-ID `dictation:video:*` records (keeping sound and theme), set `dictation:dataVersion`, and show a one-time notice.
+   - **Before wiring it:** dry-run on a scratch copy (real `cache/` copy + the decoded localStorage export), show what would be backed up and cleared, test restoring, and document how to restore.
+2. **Frontend:**
+   - the engine reads the unified `sentences` directly
+   - padding 0.1 / 0.25 s (configurable) with clamping to the neighbouring sentences, plus the offset on top
+   - `play_start`
+   - the "unclear audio" badge
+   - progress tied to `transcript_version`: on a mismatch, reset the position, keep the stats and show a notice
+3. **Testing and docs:**
+   - a section 15 browser regression on YouTube and uploaded videos
+   - the manual test checklist
+   - README restore instructions

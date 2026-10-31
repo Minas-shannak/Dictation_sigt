@@ -30,12 +30,12 @@ Decided after the Phase 3 experiments:
 
 8. **VAD off by default:** `vad_filter=False` (configurable, part of the layer-1 cache key). On a movie clip VAD dropped 36 of 56 dialogue lines spoken over the score (1 of 56 with VAD off); the hallucination filter handles what Whisper writes for music and silence. No "has music" UI option.
 9. **Very short exercises** ("Two.", "Make that five.") and small mishearings such as "3D" are acceptable.
-10. **Model:** `large-v3-turbo` with `INITIAL_PROMPT` (kept, harmless), for everything: GPU float16 and the CPU fallback int8 (same model; no second model, no "re-transcribe" button). Reason: the main use is movie clips, and with the human-verified reference large-v3 drops dialogue spoken over the score (movie WER 16.7% vs 12.3% for turbo + prompt), while turbo stays close to it on clean speech. Because CPU fallback is slow, the UI clearly shows "Running on CPU, this will be slow" with real progress. (Evaluation table in PROGRESS.md.)
+10. **Model:** `large-v3-turbo`, **without** `INITIAL_PROMPT` (empty by default: on movie clips turbo scores better without it, 11.5% vs 12.3% WER, and it removes the leak risk; the prompt-leak filter stays), for everything: GPU float16 and the CPU fallback int8 (same model; no second model, no "re-transcribe" button). Reason: the main use is movie clips, and with the human-verified reference large-v3 drops dialogue spoken over the score (movie WER 16.7% vs 12.3% for turbo + prompt), while turbo stays close to it on clean speech. Because CPU fallback is slow, the UI clearly shows "Running on CPU, this will be slow" with real progress. (Evaluation table in PROGRESS.md.)
 11. **Lowercase "i":** standalone "i", "i'm", "i'll", "i've", "i'd" become "I..." in the training transcript only (section 10A).
 12. **YouTube captions** may be used only as a test reference in `tests/` and `docs/`, never in application code.
 13. **Prompt safeguards:** a segment that substantially repeats the prompt is flagged as a hallucination (`prompt_leak`), and an isolated low-confidence stock phrase such as "Thank you." on silence is flagged (`isolated_stock_phrase`). See section 7.
 14. **Stretched first words:** a separate per-sentence `play_start`, computed in processing (layer 2), may only move playback start *later* than the stored start; stored word timestamps never change; every adjustment is logged; tested with the "they're" case from the movie clip. Implemented in Phase 7 (section 9B).
-15. **Clarity:** each sentence gets a clarity score in layer 2 (mean word probability; no retranscription) and an `unclear` flag below a configurable threshold (`SENTENCE_CLARITY_MIN`, starting at 0.7). Unclear sentences are never deleted. In Phase 7 they show a small "unclear audio" badge, and skipping one with Next doesn't count in the WPM/accuracy stats.
+15. **Clarity:** each sentence gets a clarity score in layer 2 (mean word probability; no retranscription) and an `unclear` flag below a configurable threshold (`SENTENCE_CLARITY_MIN` = **0.8**, configurable: it also marks misheard lines, which matter most because a misheard line is a wrong exercise). Unclear sentences are never deleted. In Phase 7 they show a small "unclear audio" badge, and skipping one with Next doesn't count in the WPM/accuracy stats.
 
 ## 1. Main Objective
 
@@ -239,7 +239,7 @@ Library: [faster-whisper](https://github.com/SYSTRAN/faster-whisper). Check its 
 
 ### A. Model
 
-- **\[Decided\]** `large-v3-turbo` with a short punctuated `INITIAL_PROMPT`, chosen on real clips (experiment C plus the human-verified movie reference, PROGRESS.md: small, small + prompt, large-v3, large-v3 + prompt, large-v3-turbo, large-v3-turbo + prompt). It is the only model: the CPU fallback uses it too (int8). Do not download other models automatically.
+- **\[Decided\]** `large-v3-turbo` without `INITIAL_PROMPT` (empty by default), chosen on real clips (experiment C plus the human-verified movie reference, PROGRESS.md: small, small + prompt, large-v3, large-v3 + prompt, large-v3-turbo, large-v3-turbo + prompt). It is the only model: the CPU fallback uses it too (int8). Do not download other models automatically.
 - The model name is still one setting (config file or environment variable), not hardcoded.
 - `initial_prompt` applies to the first 30 s window only when `condition_on_previous_text=False` (checked in the faster-whisper source). Passing the prompt as `hotwords` (every window) was tested and rejected: it deleted real speech and leaked the prompt into music.
 
@@ -443,7 +443,7 @@ The dictation engine receives the same structure for every source. Illustrative 
   "model": "large-v3-turbo",
   "device": "cuda",
   "compute_type": "float16",
-  "asr_settings": { "vad_filter": false, "condition_on_previous_text": false, "initial_prompt": "Hi, how are you? ..." },
+  "asr_settings": { "vad_filter": false, "condition_on_previous_text": false, "initial_prompt": "" },
   "processing_settings": { "remove_fillers": true },
   "processing_version": 1,
   "transcript_version": "a1b2c3",

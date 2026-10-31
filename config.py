@@ -33,15 +33,15 @@ VAD_FILTER = False
 VAD_THRESHOLD = 0.5
 CONDITION_ON_PREVIOUS_TEXT = False   # reduces repetition loops
 BEAM_SIZE = 5                        # faster-whisper's default
-# Text shown to Whisper as if it came before the audio; a well-punctuated prompt
-# nudges it towards punctuated output. With CONDITION_ON_PREVIOUS_TEXT off,
-# faster-whisper uses it for the first 30 s window only. Part of the ASR settings
-# (changing it means retranscribing). Empty = no prompt.
-INITIAL_PROMPT = "Hi, how are you? I'm fine, thanks. Well, let's talk about it. It's a long story, but I'll keep it short."
+# Text shown to Whisper as if it came before the audio (first 30 s window only, with
+# CONDITION_ON_PREVIOUS_TEXT off). Empty by default: on movie clips turbo scored better
+# without it (WER 11.5% vs 12.3%) and it can leak into music; the prompt-leak filter stays
+# in place in case it is set. Part of the ASR settings (changing it means retranscribing).
+INITIAL_PROMPT = ""
 
 # --- Transcript processing (ai/transcript_processor.py) ----------------------
 # Bump whenever processing logic changes in a way that changes the sentences.
-PROCESSING_VERSION = 6
+PROCESSING_VERSION = 7
 
 # Hallucination filter. A segment is excluded from the training transcript (but
 # kept in the raw result) if any rule matches. The defaults for the first two
@@ -128,9 +128,15 @@ SENTENCE_LONG_SILENCE_SECONDS = 2.0
 # so without the word list the split falls mid-phrase.
 # Per-sentence clarity = mean word probability. Below this a sentence is marked "unclear"
 # (a badge in the UI; skipping it doesn't count in the stats). It is never deleted.
-# Starting value from the real clips: clean speech is almost all above 0.7 (conversation:
-# 1 of 70 below, numbers: 0 of 69); the movie's shouted or music-covered lines fall below.
-SENTENCE_CLARITY_MIN = 0.7
+# 0.8 also marks lines Whisper misheard ("We're not trick you." 0.79), which matter most: a
+# misheard line is a wrong exercise. Clean speech is almost all above it (conversation: 1 of 70
+# below, numbers: 3 of 69); the movie's shouted, music-covered or misheard lines fall below.
+SENTENCE_CLARITY_MIN = 0.8
+# After music or a pause Whisper sometimes stretches a sentence's first word back over the
+# music (movie clip: "they're" 271.26-277.38 s, spoken at about 277.2 s). If the first word is
+# longer than this, playback starts at its end minus this (`play_start`); never earlier than
+# the stored start, and the stored timestamps don't change.
+STRETCHED_FIRST_WORD_SECONDS = 1.0
 SENTENCE_SPLIT_PAUSE_SECONDS = 0.3
 SENTENCE_SPLIT_BEFORE_WORDS = {"and", "but", "because", "so", "or", "when", "which", "then", "while",
                                "although", "though", "whereas", "if", "until", "unless", "before", "after"}

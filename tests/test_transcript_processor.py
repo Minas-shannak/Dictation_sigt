@@ -420,7 +420,7 @@ def real(request):
 # over music ("Let's talk about it.") and a closing "Thank you." after several seconds of music.
 EXPECTED_EXCLUSIONS = {
     "conversation": [], "numbers": [], "movie": [],
-    "music": ["Let's talk about it.", "Thank you."],
+    "music": [],  # without the prompt nothing leaks; the prompt-leak case is tested on the *_prompt fixtures
 }
 
 
@@ -480,7 +480,7 @@ def _fixture_raw(name):
     ("conversation", [("um", 43.8), ("um", 116.9)]),
     ("numbers", [("um", 32.2), ("um", 34.1)]),
     ("experiments/movie_small", [("Uh,", 100.16), ("uh,", 125.62)]),
-    ("experiments/conversation_turbo", [("um", 43.8), ("um", 116.9)]),
+    ("experiments/conversation_turbo_prompt", [("um", 43.8), ("um", 116.9)]),
 ])
 def test_real_fillers_are_removed_and_expressions_kept(name, fillers):
     raw = _fixture_raw(name)
@@ -577,3 +577,28 @@ def test_isolated_subtitle_credit_is_flagged():
     # The word inside ordinary speech is kept.
     speech = seg(timed("The reviewer said it was fine.", 5.0))
     assert find_hallucinations([speech, talk], default_settings()) == {}
+
+
+def test_play_start_moves_later_for_a_stretched_first_word_only(caplog):
+    # The real case: small on the movie clip stretched "they're" over 6 s of music
+    # (271.26-277.38); the caption reference has "They're all going out." at 277.16.
+    raw = _fixture_raw("experiments/movie_small")
+    before = copy.deepcopy(raw)
+    with caplog.at_level("INFO", logger="ai.transcript_processor"):
+        r = process_transcript(raw)
+    st = next(x for x in r["sentences"] if x["words"][0]["word"].lower().startswith("they're"))
+    assert (st["start"], st["play_start"]) == (271.26, pytest.approx(276.38))
+    assert st["words"][0]["start"] == 271.26  # stored word timestamps unchanged
+    assert raw == before
+    assert any("they're" in m and "playback starts at 276.38" in m for m in caplog.messages)
+    for x in r["sentences"]:
+        assert x["play_start"] >= x["start"]  # never earlier
+        if x["words"][0]["end"] - x["words"][0]["start"] <= 1.0:
+            assert x["play_start"] == x["start"]
+
+
+def test_play_start_limit_is_configurable():
+    tokens = [(" Well,", 0.0, 1.8), (" here", 1.8, 2.0), (" we", 2.0, 2.2), (" go.", 2.2, 2.5)]
+    assert process_transcript(raw_of(seg(tokens)))["sentences"][0]["play_start"] == pytest.approx(0.8)
+    r = process_transcript(raw_of(seg(tokens)), {"stretched_first_word_seconds": 2.0})
+    assert r["sentences"][0]["play_start"] == 0.0

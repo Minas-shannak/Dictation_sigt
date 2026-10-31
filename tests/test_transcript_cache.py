@@ -65,7 +65,7 @@ def test_unified_transcript_has_the_section_11_fields(env):
     assert (t["video_id"], t["source_type"], t["source_ref"]) == ("yt:eyoFYpI47Qg", "youtube", "eyoFYpI47Qg")
     assert t["model"] == config.WHISPER_MODEL and t["processing_version"] == config.PROCESSING_VERSION
     s0 = t["sentences"][0]
-    assert set(s0) == {"index", "text", "start", "end", "clarity", "unclear", "words"}
+    assert set(s0) == {"index", "text", "start", "end", "play_start", "clarity", "unclear", "words"}
     assert (s0["start"], s0["end"]) == (s0["words"][0]["start"], s0["words"][-1]["end"])
     json.dumps(t)
 

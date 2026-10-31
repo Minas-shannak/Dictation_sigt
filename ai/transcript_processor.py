@@ -37,7 +37,7 @@ SETTING_NAMES = [
     "SENTENCE_MAX_WORDS", "SENTENCE_MAX_SECONDS", "SENTENCE_MIN_WORDS", "STANDALONE_EXPRESSIONS",
     "SINGLE_WORD_MERGE_SECONDS", "SENTENCE_PAUSE_SECONDS",
     "SENTENCE_LONG_SILENCE_SECONDS", "SENTENCE_SPLIT_PAUSE_SECONDS", "SENTENCE_SPLIT_BEFORE_WORDS",
-    "SENTENCE_CLARITY_MIN",
+    "SENTENCE_CLARITY_MIN", "STRETCHED_FIRST_WORD_SECONDS",
     "TITLE_ABBREVIATIONS", "ABBREVIATIONS",
 ]
 
@@ -495,11 +495,20 @@ def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
         # Clarity: the mean word probability. Low values mark speech that is hard to hear
         # (shouted over music, mumbled); such sentences stay, flagged "unclear".
         clarity = round(sum(w["probability"] for w in p) / len(p), 3)
+        # Playback start: later than `start` when the first word is stretched over the music before it.
+        first = p[0]
+        play_start = first["start"]
+        if first["end"] - first["start"] > s["stretched_first_word_seconds"]:
+            play_start = first["end"] - s["stretched_first_word_seconds"]
+            log.info("Sentence %d: first word %r spans %.2f-%.2f s (%.1f s); playback starts at %.2f s instead of %.2f s",
+                     len(sentences), first["word"], first["start"], first["end"], first["end"] - first["start"],
+                     play_start, first["start"])
         sentences.append({
             "index": len(sentences),
             "text": " ".join(w["word"] for w in p),
             "start": p[0]["start"],
             "end": p[-1]["end"],
+            "play_start": play_start,
             "clarity": clarity,
             "unclear": clarity < s["sentence_clarity_min"],
             "words": [{k: w[k] for k in ("word", "start", "end", "probability", "source")} for w in p],
