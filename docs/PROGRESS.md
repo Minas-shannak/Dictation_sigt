@@ -594,3 +594,28 @@ All runs: matched-word timing agrees with the references (0–5 words off per ru
 ### Not done / next
 - **Phase 5:** jobs, status and cancellation; uploads (2 GB limit, secure names, ffprobe validation, codec check and Convert); the HTML5 player behind the shared interface; 30-day upload retention. `get_transcript` is ready to be called from the job worker. **Cancellation inside FFmpeg or Whisper is not implemented yet.** A cancelled job must not write cache entries, and since writes only happen after a step completes, cancelling between steps already satisfies that. Phase 5 adds the checks.
 - `app.py` still serves the old caption pipeline (replaced in Phase 6).
+
+## Verified result: human listening check of the movie clip (Oct 31, 2026)
+
+The user listened to the movie clip (cpbARmnt_nU, 00:00–05:00):
+- **0:38–1:10:** the 4 sentences small kept with no caption reference are **spoken exactly as transcribed**: "Jack! Jack!", "Come on, Jack.", "You guys have fun all the time.", "Jack, get down from there." Keeping them was correct.
+- **~2:27 (147 s):** **music only.** large-v3's "Oh, my God." there is a real hallucination, and excluding it was correct.
+- **Verdict:** on this clip the filter removed no real speech and kept no confirmed hallucination.
+
+**Recorded in `tests/reference/movie.json`:**
+- the 4 verified lines are added to `lines` with `"source": "human"` (the auto-captions have nothing at 28.7–71.8 s)
+- a `human_verified` block holds the speech spans and the music-only span 145–150 s
+
+**New test:** `test_movie_filter_agrees_with_the_listening_check` runs on both the large-v3 and the small movie fixtures. It checks that no excluded segment overlaps verified speech, that no kept sentence falls in the music-only span, and that something written there was excluded.
+
+**Model impact (needs attention).** With the verified lines in the reference, the movie WER changes order:
+- small 11.2%, turbo 11.5%, **large-v3 + prompt 16.7%** (S4 **D31** I10)
+- Earlier, small's real lines counted as "insertions" against the incomplete auto-captions.
+- **large-v3 drops whole lines of dialogue spoken over the score:**
+  - "You guys have fun all the time." and "Come on, Jack" (both verified by listening)
+  - "No, we're not. Would I", "Yes, you always play tricks. No, all right.", "Turn them off"
+- small keeps nearly all of them.
+- It also runs the remaining verified lines together without punctuation: "Jack, get down from there You're funny, Jack Be careful We will".
+- So large-v3 is best on clean speech (conversation 3.8%, numbers 4.0%) but loses dialogue under music, which the filter cannot recover. The model is part of the layer-1 key, so this does not block Phase 5. **The model decision should be revisited with this in mind.**
+
+pytest: 162 passed.

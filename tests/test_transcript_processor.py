@@ -416,8 +416,8 @@ def real(request):
 
 # What the filter excludes on the real clips (large-v3 + prompt, VAD off). Speech clips: nothing.
 # Song: the prompt leaking over music ("Let's talk about it.", no_speech_prob 0.98) and a closing
-# "Thank you." after 7.6 s of music. Movie: "Oh, my God." during the score (low word probability,
-# no reference line there, so unverified).
+# "Thank you." after 7.6 s of music. Movie: "Oh, my God." at 147 s, verified by a listening check
+# as music only (tests/reference/movie.json, human_verified).
 EXPECTED_EXCLUSIONS = {
     "conversation": [], "numbers": [],
     "music": ["Let's talk about it.", "Thank you."],
@@ -528,3 +528,16 @@ def test_lowercase_i_is_capitalized_in_the_training_transcript_only():
     assert " ".join(texts(r)) == "I think I'm right, I'll go, I've seen it, I'd say. Hi, it's in it, i.e. fine"
     assert raw == before  # the raw words keep their lowercase "i"
     assert "i think i'm" in r["original_transcript"]
+
+
+@pytest.mark.parametrize("name", ["movie", "experiments/movie_small"])
+def test_movie_filter_agrees_with_the_listening_check(name):
+    # tests/reference/movie.json "human_verified": speech heard as transcribed, and a music-only stretch.
+    verified = json.loads((Path(__file__).parent / "reference" / "movie.json").read_text(encoding="utf-8"))["human_verified"]
+    r = process_transcript(_fixture_raw(name))
+    for e in r["excluded"]:
+        for v in verified["speech"]:
+            assert not (e["start"] < v["end"] and e["end"] > v["start"]), f"real speech {v['text']!r} excluded: {e['text']!r}"
+    for quiet in verified["no_speech"]:
+        assert not [st["text"] for st in r["sentences"] if st["start"] < quiet["end"] and st["end"] > quiet["start"]]
+        assert any(quiet["start"] <= e["start"] < quiet["end"] for e in r["excluded"])  # what Whisper wrote there was caught

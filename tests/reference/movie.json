@@ -6,7 +6,7 @@
 ],
 "caption_source": "auto",
 "language": "en",
-"note": "YouTube captions, used only as a test reference for what was said; never read by the app.",
+"note": "YouTube captions, used only as a test reference for what was said; never read by the app. Lines with source 'human' were added after a listening check (see human_verified).",
 "lines": [
 {
 "start": 3.64,
@@ -42,6 +42,30 @@
 "start": 26.24,
 "duration": 2.44,
 "text": "Hey."
+},
+{
+"start": 39.72,
+"duration": 2.6,
+"text": "Jack! Jack!",
+"source": "human"
+},
+{
+"start": 63.78,
+"duration": 1.16,
+"text": "Come on, Jack.",
+"source": "human"
+},
+{
+"start": 65.14,
+"duration": 1.14,
+"text": "You guys have fun all the time.",
+"source": "human"
+},
+{
+"start": 66.74,
+"duration": 1.4,
+"text": "Jack, get down from there.",
+"source": "human"
 },
 {
 "start": 71.8,
@@ -348,5 +372,38 @@
 "duration": 2.2,
 "text": "Two."
 }
+],
+"human_verified": {
+"method": "listening check by the user, Oct 31, 2026",
+"speech": [
+{
+"start": 39.72,
+"end": 42.32,
+"text": "Jack! Jack!"
+},
+{
+"start": 63.78,
+"end": 64.94,
+"text": "Come on, Jack."
+},
+{
+"start": 65.14,
+"end": 66.28,
+"text": "You guys have fun all the time."
+},
+{
+"start": 66.74,
+"end": 68.14,
+"text": "Jack, get down from there."
+}
+],
+"speech_note": "Spoken exactly as transcribed by small (experiments/movie_small.json). Missing from the auto-captions (which have nothing between 28.7 and 71.8 s), so added to lines with source 'human'.",
+"no_speech": [
+{
+"start": 145.0,
+"end": 150.0,
+"note": "Music only. 'Oh, my God.' (large-v3, 147.22 s) is a hallucination; excluding it was correct."
+}
 ]
+}
 }
