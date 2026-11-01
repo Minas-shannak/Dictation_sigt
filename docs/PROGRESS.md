@@ -14,7 +14,7 @@ Update this file at the end of every phase. Commit after every phase.
 | 5. Background jobs and local upload | Done, approved |
 | 6. Replace the YouTube caption pipeline | Done, approved |
 | 7. Integrate with the dictation engine | Done, **waiting for review** (manual checklist below) |
-| 8. Test and fix regressions | Not started |
+| 8. Test and fix regressions | Done, **waiting for review**: 1 failed item (last/first word cut where sentences touch), see below |
 
 ## Phase 1: Inspection (Oct 31, 2026)
 
@@ -1090,3 +1090,100 @@ Spec and mockups: `new_design/DESIGN.md`, `home.dc.html`, `practice.dc.html`, `v
 - Delete feature browser test: 13/13.
 - New UI checks: 22/23. All passed except one. Cassette reels follow progress; the fonts load; the wrong-letter status appears after 2 misses and clears; the 0.75× key works; finishing the last line opens End of tape, and "Back to the last line" returns; there's no horizontal scroll at 390 px; on a phone the answer sheet comes before the sidebar; the typing box is on screen at 1366×768, 1440×900 and 1920×1080. **Not at 1280×650**, where the video keeps a 320 px minimum width.
 - Contrast: the text pairs pass 4.5:1 except the spec's hidden-letter dots (`--word-hidden` on `--card-inset`, 3.45:1, kept as specified) and the white play icon on orange (3.66:1, an icon, which passes the 3:1 rule for graphics).
+
+## Phase 8: section 18 test pass (2026-11-01)
+
+The code tested is commit `9781fb6` (restyle; playback padding 0.1 s / 0.25 s with clamping, since the overlap change was reverted).
+- All server runs used scratch folders (copies of test data), never the real `cache/`, `uploads/` or `backup/`.
+- Firefox played into a PulseAudio null sink, so nothing came out of the speakers.
+- **Your manual checklist results** (items 1–16) have not been received yet. Items only a person can judge are marked so below.
+
+### A. Automated tests: PASSED
+- **pytest: 238 passed.** They cover what 18A lists:
+  - `transcript_processor`, 104 tests: annotations, fillers on/off, meaningful expressions, timestamps unchanged by cleaning, contractions, numbers and their timestamps, segmentation, hallucination filter
+  - cache keys: processing settings reuse layer 1; model/recognition settings re-transcribe
+  - `transcript_version` hashing
+- **Progress versioning:** a mismatched `transcript_version` doesn't apply old progress. This is front-end code, tested in the browser regression ("regenerated transcript: position reset, stats kept"): passed.
+
+### B. Pipeline tests with real media: 11 of 11 PASSED
+All of them went through the real app server with an empty cache.
+
+| # | Test | Result |
+|---|---|---|
+| 1 | YouTube video with captions (`jNQXAC9IVRw`, has manual en/de captions) | **Passed.** Transcribed from the audio (cuda/float16, 8 s). yt-dlp runs with `writesubtitles`/`writeautomaticsub` False, and no app code imports a captions library. The transcript differs from YouTube's captions, e.g. "really, really long **fronts**", where the captions say "trunks": a Whisper mishearing. The sentence split falls between "long" and "fronts". |
+| 2 | YouTube video without captions (`3-sfGRswzq0`, 0 manual and 0 automatic caption tracks) | **Passed.** 26 sentences. |
+| 3 | Local MP4 upload (conversation clip) | **Passed.** h264/aac, playable, 70 sentences. |
+| 4 | Local MOV/HEVC (`jfk_hevc.mov`) | **Passed.** Flagged HEVC and not playable, still transcribed; Convert made it h264 and playable with the same video ID. (A rerun of the driver showed "FAIL" only because the same file was already stored and converted; content-hash storage working as designed.) |
+| 5 | Background music | **Passed.** Movie clip (dialogue over the score): 97 sentences. Song with vocals over music: 26 lyric lines, no invented text seen. Some lines split mid-phrase ("wrestling with danger Right into"), because lyrics have little punctuation. |
+| 6 | Long pause / silence | **Passed.** JFK speech + 30 s of silence + the speech again: no sentence inside the gap (11.0–41.0 s), and the second part starts at 40.9 s. |
+| 7 | Filler words (conversation `eyoFYpI47Qg`, 16 min) | **Passed.** 3 filler tokens in Whisper's raw words, 0 in the exercises. |
+| 8 | "Wow", "Hey", "Oh" | **Passed** for "Hey." and "Oh, Jack, you can't have fun all the time." / "Oh, my God." (movie). "Wow" doesn't occur in these videos; it is covered by the unit test of meaningful expressions. |
+| 9 | Fast speech | **Passed.** The conversation clip sped up to 1.5× (synthetic, not a naturally fast speaker): 719 words vs 744 at normal speed, word-sequence similarity 95.7%. |
+| 10 | Video with no audio stream | **Passed.** HTTP 400 `no_audio`, "This video has no audio." |
+| 11 | Same video twice | **Passed.** `from_cache` true, answered in 0.00 s, no new transcription in the log. |
+
+### C. Hardware tests: 4 of 4 PASSED
+- **Model loaded once:** one "Loaded Whisper model 'large-v3-turbo' on cuda (float16) in 1.4s" over 8 transcriptions in the same server.
+- **GPU path:**
+  - every job status and log line says cuda (float16)
+  - `nvidia-smi`, sampled during a new transcription, listed the server process (PID 241363) using 2.2–2.3 GB
+  - speed: 975 s of audio in 17.2 s, 510 s in 8.3 s
+- **CPU fallback at load** (`CUDA_VISIBLE_DEVICES=""`):
+  - the log says "No CUDA device available; using the CPU", then "Loaded … on cpu (int8)"
+  - the job reported `device: cpu` while running (what shows "Running on CPU, this will be slow")
+  - 11 s of audio in 4.8 s
+  - no progress percentage appeared, because a one-segment clip only reports progress when it ends
+- **CPU fallback at transcription time:**
+  - cuBLAS was hidden, so CUDA loaded but failed with "Library libcublas.so.12 is not found"
+  - the job retried on the CPU, finished correctly, and the next job stayed on the CPU
+
+### D. Playback and regression tests
+**Sentence boundaries on both players: FAILED (some words cut).**
+- **Method:** the app played 10 sentences per source (movie and conversation, each on YouTube and as an uploaded MP4; 40 in total). 6 per source were chosen where the next sentence follows within 0.3 s. The output was recorded and aligned with the original audio, and each recording was transcribed with Whisper to see whether the sentence's first and last words were heard.
+- **The players do what the window says:**
+  - the played start equals the window start within 0.01 s
+  - the end is 0.00–0.06 s after the window end
+  - no audio is lost at the start (measured earlier: YouTube −8 ms, HTML5 0 ms)
+- **First word heard:** 36/40. **Last word heard:** 36/40. **Last word ending within 0.05 s of the cut:** 3.
+
+The flagged sentences:
+
+| Source | # | Margin before / after | What happened |
+|---|---|---|---|
+| Movie, YouTube | 88 | 0.00 / 0.00 | **First word "real" not heard.** The previous sentence ends exactly at its start. |
+| Conversation, YouTube | 66 | 0.00 / 0.00 | **Last word "oh" not heard** ("…how many detentions I got really oh"). |
+| Conversation, MP4 | 43 | 0.00 / 0.00 | **Last word "I" not heard** ("…yeah I really was I"). |
+| Conversation, MP4 | 15 | 0.00 / 0.00 | "ciggy" heard but ends 0.03 s before the cut: probably clipped. |
+| Conversation, MP4 | 52 | 0.00 / 0.00 | "bit" heard but ends 0.02 s before the cut: probably clipped. |
+| Movie, YouTube | 7 | 0.10 / 0.25 | "Jack!" at the end not heard even with the full margin: a cut or a bad timestamp, unclear. |
+| Movie, MP4 | 24, 36 | — | Not cuts: the stored transcript is wrong ("We're not trick you" is "Would I trick you"; "Did you see" is "Do you see"). |
+| Movie, MP4 | 71 | — | Not a cut: "Oh, my God." is likely invented (the recording has only "you"). |
+
+- **Cause:** the clamping. In the conversation most sentences touch their neighbours (`prev.end == start`, `end == next.start`), so the padding is clamped to zero. Whisper's word timestamps are estimates, so a word at the boundary gets cut. This matches your real-use report.
+- **What I didn't do:** the fix (no clamping, more padding, a margin slider) was commit `453c39e`, which you asked to remove, so I haven't changed anything. Recommendation: bring back at least the "no clamping" part, or decide on another approach. With that change, the measured played ranges started about 0.9 s before and ended about 1.0 s after every sentence (see `453c39e` in the history).
+
+**Section 15 features on both sources: PASSED except fullscreen (needs a real display).** Phase 7 regression, YouTube + upload: 66/68, with no console errors.
+- **Passed:** play once and pause; no auto-advance; time shown; typing, wrong key, Backspace, Ctrl+H, auto-hint after 3 misses, required spaces, colors; completing moves on; stats, average, missed words, progress bar; Replay, Play/Pause, Enter, Next, Previous, Hint button; a skipped line adds no stats; offset; Ctrl+M, volume; unclear badge; Recent videos after a reload; position restored; regenerated-transcript handling.
+- **Failed (2):** Fullscreen on each source, because headless Firefox refuses it. It is on the manual checklist (item 8).
+- **Restyled UI:** 22/23. End of tape, cassettes, wrong-letter status, 0.75× key, phone layout, the typing box on screen at 1366×768 / 1440×900 / 1920×1080. **Failed: 1280×650**, where the typing box is 82 px below the fold because the video keeps a 320 px minimum width.
+- **Delete a video:** 13/13 (confirm, Undo, reload during the window, real deletion, a running job cancelled first, YouTube deletion).
+
+**Section 13 (old saved progress and recent videos): PASSED.** On a copy of your real backup's 7 caption files plus the exported old browser data:
+- the server backed up and removed the 7 files, with checksums in the manifest
+- the page backed up its old data to the server and downloaded a copy, both identical to the original
+- the 2 old videos were cleared, the sound setting kept, and the notice shown
+- a second visit did nothing
+- restoring as the README describes gave back exactly the original data
+
+### Not performed
+- **Human listening judgements**: whether boundaries sound natural, whether the unclear badge appears on the right lines, typing feel, sound pleasantness, colors by eye. These are checklist items 2–5, 7, 11 and 15; I'm waiting for your results.
+- **Fullscreen**: needs a real browser window (checklist item 8).
+- **A naturally fast speaker**: B9 used sped-up audio.
+
+### Summary
+- Section 18A, B and C pass, and so does section 13.
+- 18D fails on one point: words are cut at boundaries where sentences touch (about 5 of 40 sentences tested), caused by the clamping. It needs your decision.
+- Also open: the 1280×650 layout, and fullscreen and the listening items, which wait for your manual checklist.
+
+### Files changed
+- `docs/PROGRESS.md` only. The test drivers are in the scratchpad: `p8b.py`, `dplay.py`, `dcheck.py`, `p8reg.py`, `p8mig.py`.
