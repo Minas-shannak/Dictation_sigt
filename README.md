@@ -72,7 +72,7 @@ Run the tests with `pytest` (install the dev requirements first:
 
 - `app.py`: Flask server (the page, `/static/`, and the API for YouTube and uploaded videos, jobs and media)
 - `index.html`: page markup only
-- `static/style.css`: all styles, including the light and dark themes
+- `static/style.css`: all styles (the "Booth 07" design in `new_design/DESIGN.md`; every color is a variable at the top), including the light and dark themes
 - `static/app.js`: all frontend code (player, typing, sounds, stats, saved progress)
 - `static/sounds/`: typing sounds (`key.mp3`, `error.mp3`, `hint.wav`)
 - `config.py`: settings for speech recognition, audio extraction and transcript processing, with defaults
@@ -116,11 +116,16 @@ After editing `style.css` or `app.js`, bump the version in its link in `index.ht
   **Space** to finish the word (the last word of a line needs no space). Punctuation is filled in
   for you, so for "story, of" you type `story`, then Space, then `of`. Case and accents don't matter.
 - A wrong key (including a letter where a space belongs, or a space mid-word) flashes red in the
-  box under the sentence, which shows only the word you're typing.
+  box under the sentence, which shows only the word you're typing. The box turns red and says how
+  many of the 3 tries before a hint you've used on the current letter.
 - Colors: teal for finished words, orange for the word you're typing, purple for hinted letters.
 - A line never plays on its own. The next one starts after you finish the current one.
-- Use **Offset** (−0.5 s to +0.5 s) if a video's lines start slightly early or late. It's saved per video.
-- The theme follows your system's light/dark setting. The 🌙/☀️ button in the corner overrides it, and the choice is remembered.
+- Use **Caption timing** (−0.50 s to +0.50 s) if a video's lines start slightly early or late. It's saved per video.
+- The theme follows your system's light/dark setting. The moon/sun button in the corner overrides it, and the choice is remembered.
+- Finishing the last line shows an **End of tape** summary (WPM, accuracy, time typing, missed words).
+  "Back to the last line" returns to the video; "Load another tape" goes back to the start page.
+- On the start page, each video in **Pick up a tape** is a cassette: the reels wind from left to right
+  as you finish lines. "Done" means its last line is finished.
 - Progress, offset, stats and missed words are stored in the browser's localStorage, per video.
 - **Uploaded videos** are checked (type, content, size), stored in `uploads/` and transcribed from their own audio
   in the background. The panel shows each step with real progress and whether the GPU or the CPU is used
@@ -204,7 +209,7 @@ at the top of `static/app.js`.
 
 ## Deleting a video
 
-Each entry in Recent videos has a 🗑 button. After you confirm, the entry disappears and an **Undo**
+Each cassette in Pick up a tape (the recent videos) has a trash button. After you confirm, the entry disappears and an **Undo**
 notice shows for 8 seconds; only then is everything for that video deleted: its saved progress,
 statistics, missed words and timing offset, all its cached transcripts (every model/settings
 variant), and for an uploaded video the stored file. A running download, transcription or
@@ -218,7 +223,7 @@ nothing is deleted. Statistics are per video only, so no other figures change. B
   the line to its end, minus any time the video was playing. Each character counts once, so
   deleting and retyping doesn't inflate it; hinted characters don't count.
 - **Accuracy**: correct keystrokes / all letter, digit and space keystrokes (Backspace isn't counted).
-- **Video average**: over all completed lines, weighted by length. Redoing a line replaces its stats.
+- **This tape** (WPM and accuracy tiles): the average over all completed lines, weighted by length. Redoing a line replaces its stats.
 - **Missed words**: any word where you made an error or used a hint.
 
 ## Troubleshooting

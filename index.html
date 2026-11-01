@@ -8,13 +8,44 @@
   // Applied before first paint so a saved theme doesn't flash.
   try { const t = localStorage.getItem("dictation:theme"); if (t) document.documentElement.dataset.theme = JSON.parse(t); } catch {}
 </script>
-<link rel="stylesheet" href="/static/style.css?v=4">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
+<header class="topbar">
+  <div class="wrap topbarIn">
+    <span class="logo"><span class="logoDot"></span>Dictation</span>
+    <nav class="homeOnly" aria-label="Sections">
+      <a href="#recent">Your tapes</a>
+      <a href="#how">How it works</a>
+      <a href="#keys">Keys</a>
+    </nav>
+    <div class="practiceOnly titleRow">
+      <button id="backBtn" type="button">← Tapes</button>
+      <span id="videoTitle"></span>
+    </div>
+    <span class="grow"></span>
+    <label for="volume" class="practiceOnly volumeLabel">Volume</label>
+    <input id="volume" class="practiceOnly" type="range" min="0" max="100" step="1" title="Typing sound volume">
+    <button id="muteBtn" class="roundBtn" type="button" aria-label="Mute typing sounds (Ctrl+M)" aria-pressed="false">
+      <svg id="soundOnIcon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><rect x="2.5" y="14" width="4.5" height="7" rx="1.5"/><rect x="17" y="14" width="4.5" height="7" rx="1.5"/></svg>
+      <svg id="soundOffIcon" class="hidden" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><rect x="2.5" y="14" width="4.5" height="7" rx="1.5"/><rect x="17" y="14" width="4.5" height="7" rx="1.5"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+    </button>
+    <button id="themeBtn" class="roundBtn" type="button" aria-label="Switch light / dark theme" title="Switch light / dark theme">
+      <svg id="moonIcon" aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      <svg id="sunIcon" class="hidden" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v2.5M12 20v2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M1.5 12H4M20 12h2.5M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/></svg>
+    </button>
+  </div>
+</header>
+
 <main>
-  <div id="notice" class="hidden" role="status"><span id="noticeText"></span>
-    <button id="noticeAction" class="hidden" type="button"></button>
-    <button id="noticeClose" type="button" aria-label="Close">×</button></div>
+  <div class="wrap">
+    <div id="notice" class="hidden" role="status"><span id="noticeText"></span>
+      <button id="noticeAction" class="hidden" type="button"></button>
+      <button id="noticeClose" type="button" aria-label="Close">×</button></div>
+  </div>
   <dialog id="deleteDialog">
     <p id="deleteText"></p>
     <div class="row">
@@ -22,113 +53,245 @@
       <button id="deleteConfirm" class="danger" type="button">Delete</button>
     </div>
   </dialog>
-  <header>
-    <h1>Dictation</h1>
-    <button id="themeBtn" type="button" title="Switch light / dark theme"></button>
-  </header>
 
+  <!-- Home: no video loaded -->
   <section id="loadScreen">
-    <form id="loadForm" class="row">
-      <input id="urlInput" type="text" placeholder="Paste a YouTube link" autocomplete="off">
-      <input id="langInput" type="text" value="en" title="Language code (en, fr, ...); empty = detect automatically">
-      <button type="submit">Load</button>
-    </form>
-    <div id="uploadRow" class="row">
-      <span class="muted">or</span>
-      <label id="uploadBtn" title="MP4, MOV or WebM, up to 2 GB">Upload a video…
-        <input id="fileInput" type="file" accept=".mp4,.m4v,.mov,.webm,video/mp4,video/quicktime,video/webm" hidden></label>
-    </div>
-    <div id="loadError" class="error"></div>
-    <div id="processing" class="hidden">
-      <div class="row"><b id="procTitle"></b><span id="procDevice" class="muted"></span></div>
-      <div id="procStage"></div>
-      <div id="procBar"><div id="procFill"></div></div>
-      <div id="procCpu" class="warn hidden">Running on CPU, this will be slow.</div>
-      <div id="procCodec" class="warn hidden">
-        <span id="procCodecText"></span>
-        <button id="convertBtn" type="button">Convert</button>
-        <span id="convertStatus" class="muted"></span>
+    <div class="wrap hero">
+      <div class="heroText">
+        <span class="eyebrow">Booth 07 · Listening practice</span>
+        <h1>Train your ear with any YouTube video.</h1>
+        <p class="lead">Paste a link. Each line plays once, then waits while you type it from memory. Letters only appear when you get them right.</p>
+        <form id="loadForm" class="loadForm">
+          <label for="urlInput" class="srOnly">YouTube link</label>
+          <input id="urlInput" class="pill" type="text" placeholder="Paste a YouTube link" autocomplete="off">
+          <label for="langInput" class="srOnly">Language</label>
+          <input id="langInput" class="pill" type="text" value="en" title="Language code (en, fr, ...); empty = detect automatically">
+          <button type="submit" class="primary big"><span class="recDot"></span>Start listening</button>
+        </form>
+        <div id="uploadRow" class="row">
+          <span class="muted">or</span>
+          <label id="uploadBtn" title="MP4, MOV or WebM, up to 2 GB">Upload a video…
+            <input id="fileInput" type="file" accept=".mp4,.m4v,.mov,.webm,video/mp4,video/quicktime,video/webm" hidden></label>
+        </div>
+        <p class="hintLine">The audio is transcribed on your computer, so any video with speech works. Stuck on a letter? It's revealed after three misses.</p>
+        <div id="loadError" class="error"></div>
+        <div id="processing" class="card hidden">
+          <div class="row"><b id="procTitle"></b><span id="procDevice" class="muted"></span></div>
+          <div id="procStage"></div>
+          <div id="procBar"><div id="procFill"></div></div>
+          <div id="procCpu" class="warn hidden">Running on CPU, this will be slow.</div>
+          <div id="procCodec" class="warn hidden">
+            <span id="procCodecText"></span>
+            <button id="convertBtn" type="button">Convert</button>
+            <span id="convertStatus" class="muted"></span>
+          </div>
+          <div class="row"><button id="cancelBtn" type="button">Cancel</button></div>
+        </div>
       </div>
-      <div class="row"><button id="cancelBtn" type="button">Cancel</button></div>
+
+      <div class="console heroConsole" role="img" aria-label="A language lab booth: the video is paused and the line is half typed, with the rest hidden as dots">
+        <div class="grille">
+          <div class="screen">
+            <span class="screenLabel">SIDE A · LINE 014 · PAUSED</span>
+            <div class="wave"><i style="height:18px"></i><i style="height:34px"></i><i style="height:52px"></i><i style="height:28px"></i><i class="hi" style="height:64px"></i><i style="height:40px"></i><i style="height:22px"></i><i style="height:46px"></i><i class="hi" style="height:58px"></i><i style="height:30px"></i><i style="height:14px"></i><i style="height:38px"></i><i style="height:24px"></i></div>
+            <div class="subtitle"><span>The best way to learn a <span class="subTyped">lan</span><span class="blinkCursor">▍</span><span class="subHidden">····· ·· ·· ······ ·····.</span></span></div>
+          </div>
+        </div>
+        <div class="heroDeck">
+          <svg class="deckReel" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="18" class="reelFace"/><g class="reelSpokes"><line x1="20" y1="5" x2="20" y2="12"/><line x1="7" y1="27.5" x2="13" y2="24"/><line x1="33" y1="27.5" x2="27" y2="24"/></g><circle cx="20" cy="20" r="4" class="reelHub"/></svg>
+          <svg class="deckReel" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="18" class="reelFace"/><g class="reelSpokes"><line x1="20" y1="5" x2="20" y2="12"/><line x1="7" y1="27.5" x2="13" y2="24"/><line x1="33" y1="27.5" x2="27" y2="24"/></g><circle cx="20" cy="20" r="4" class="reelHub"/></svg>
+          <span class="grow"></span>
+          <span class="miniKeys"><span>◀◀</span><span>▶</span><span><span class="recDot"></span></span></span>
+          <span class="flaps big"><span>0</span><span>1</span><span>4</span></span>
+        </div>
+      </div>
     </div>
-    <div id="recent" class="hidden">
-      <h2>Recent videos</h2>
-      <ul id="recentList"></ul>
-    </div>
+
+    <section id="recent" class="band hidden">
+      <div class="wrap">
+        <div class="sectionHead">
+          <h2>Pick up a tape</h2>
+          <span class="muted">The tape winds forward as you finish lines</span>
+        </div>
+        <ul id="recentList"></ul>
+      </div>
+    </section>
+
+    <section id="how" class="wrap homeSection">
+      <h2>One line at a time, at your pace</h2>
+      <div class="howGrid">
+        <div class="howCard">
+          <div class="howHead grilleBg"><span>01</span></div>
+          <div class="howBody"><h3>Hear it once</h3>
+            <p>The video stops at the end of every line. Too fast? Replay it with Tab, or Shift+Tab at 0.75× speed.</p></div>
+        </div>
+        <div class="howCard">
+          <div class="howHead grilleBg"><span>02</span></div>
+          <div class="howBody"><h3>Type it blind</h3>
+            <p>The line stays hidden as dots. Each correct letter shows up; a wrong one buzzes. Punctuation fills in for you, and accents never need typing.</p></div>
+        </div>
+        <div class="howCard">
+          <div class="howHead grilleBg"><span>03</span></div>
+          <div class="howBody"><h3>Never stay stuck</h3>
+            <p>Miss the same letter three times and it's revealed. Ctrl+H shows a letter, twice in a row the whole word. Video and text out of step? Nudge the timing offset.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="keys" class="wrap homeSection keysSection">
+      <h2>Hands stay on the keys</h2>
+      <div class="keysGrid">
+        <div><kbd class="cap">Enter</kbd><span>Play / pause</span></div>
+        <div><kbd class="cap">Tab</kbd><span>Replay line</span></div>
+        <div><kbd class="cap">⇧ Tab</kbd><span>Replay at 0.75×</span></div>
+        <div><kbd class="cap">Ctrl H</kbd><span>Hint a letter (twice: the word)</span></div>
+        <div><kbd class="cap">Ctrl ↵</kbd><span>Accept the word</span></div>
+        <div><kbd class="cap">Ctrl ← →</kbd><span>Previous / next line</span></div>
+        <div><kbd class="cap">Backspace</kbd><span>Take back a letter</span></div>
+        <div><kbd class="cap">Ctrl M</kbd><span>Mute sounds</span></div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="wrap footerIn">
+        <span class="footerTitle"><span class="recDot"></span>Runs on your computer</span>
+        <span class="footerCmd">python app.py → 127.0.0.1:8000</span>
+      </div>
+    </footer>
   </section>
 
-  <section id="practiceScreen" class="hidden">
-    <div class="row">
-      <button id="backBtn" type="button">← Videos</button>
-      <span id="videoTitle" class="muted"></span>
-      <span id="asrInfo" class="muted"></span>
-    </div>
-
-    <div id="stage">
-      <div id="playerBox">
-        <div id="player"></div>
-        <div id="playerShield" title="Click to replay the line"></div>
-        <div id="playerError" class="hidden"></div>
-      </div>
-
-      <div id="controls">
-        <div>
-          <div class="label">Progress</div>
-          <div id="progressCount">–</div>
+  <!-- Practice: video loaded -->
+  <section id="practiceScreen" class="wrap hidden">
+    <section id="stage" class="console" aria-label="Player">
+      <div class="grille">
+        <div id="playerBox">
+          <div id="player"></div>
+          <div id="playerShield" title="Click to replay the line"></div>
+          <span id="screenLabel" class="screenLabel"></span>
+          <div id="playerError" class="hidden"></div>
         </div>
-        <div class="row">
-          <button id="prevBtn" class="iconBtn" type="button" title="Previous line (Ctrl+←)" aria-label="Previous line">
-            <svg viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg></button>
-          <button id="playPauseBtn" class="iconBtn" type="button" title="Play / pause" aria-label="Play or pause">
-            <svg id="playIcon" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
-            <svg id="pauseIcon" class="hidden" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg></button>
-          <button id="replayBtn" class="iconBtn" type="button" title="Replay line (Tab)" aria-label="Replay line">
-            <svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button>
-          <button id="nextBtn" class="iconBtn" type="button" title="Next line (Ctrl+→)" aria-label="Next line">
-            <svg viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg></button>
-          <button id="hintBtn" class="iconBtn" type="button" title="Hint (Ctrl+H)" aria-label="Hint">
-            <svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg></button>
-          <button id="fullscreenBtn" class="iconBtn" type="button" title="Fullscreen" aria-label="Fullscreen">
-            <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
+
+        <div class="counterRow">
+          <span id="progressCount" class="flaps" role="img"></span>
+          <span id="progressTotal"></span>
+          <div id="progressBar"><div id="progressFill"></div></div>
+          <span id="timeText">00:00 / 00:00</span>
+        </div>
+
+        <div id="controls">
+          <button id="prevBtn" class="key" type="button" title="Previous line (Ctrl+←)" aria-label="Previous line (Ctrl+←)">
+            <svg class="fill" viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4"/><rect x="4" y="4" width="3" height="16"/></svg></button>
+          <button id="replayBtn" class="key" type="button" title="Replay line (Tab)" aria-label="Replay line (Tab)">
+            <svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"/></svg></button>
+          <button id="playPauseBtn" class="key play" type="button" title="Play / pause (Enter)" aria-label="Play or pause (Enter)">
+            <svg id="playIcon" class="fill" viewBox="0 0 24 24"><polygon points="7 4 20 12 7 20"/></svg>
+            <svg id="pauseIcon" class="fill hidden" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg></button>
+          <button id="nextBtn" class="key" type="button" title="Next line (Ctrl+→)" aria-label="Next line (Ctrl+→)">
+            <svg class="fill" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20"/><rect x="17" y="4" width="3" height="16"/></svg></button>
+          <button id="slowBtn" class="key text" type="button" title="Replay at 0.75× (Shift+Tab)" aria-label="Replay at 0.75× speed (Shift+Tab)">0.75×</button>
+          <span class="grow"></span>
+          <button id="hintBtn" class="key text hint" type="button" title="Hint (Ctrl+H)" aria-label="Hint (Ctrl+H)">
+            <svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>Hint</button>
+          <button id="fullscreenBtn" class="key" type="button" title="Fullscreen" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
         </div>
       </div>
-      <div id="progressBar"><div id="progressFill"></div></div>
-      <div id="timeText">00:00 / 00:00</div>
-    </div>
+    </section>
 
-    <div id="dictation">
-      <span id="unclearBadge" class="hidden" title="Whisper was unsure of some words here: the audio may be unclear or misheard. Skipping it with Next doesn't affect your statistics.">unclear audio</span>
-      <div id="lineText"></div>
-    </div>
-
-    <div id="wordBox">
-      <input id="typer" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Type what you hear">
-      <span id="currentWord"></span>
-    </div>
-
-    <div id="secondary">
-      <div class="row">
-        <button id="muteBtn" type="button" title="Typing sounds (Ctrl+M)">🔊</button>
-        <input id="volume" type="range" min="0" max="100" step="1" title="Typing sound volume">
-        <label class="muted">Offset
-          <button id="offsetDown" type="button">−</button>
-          <span id="offsetValue">0.0s</span>
-          <button id="offsetUp" type="button">+</button>
-        </label>
+    <aside id="sidebar">
+      <div class="card sideCard">
+        <h2 class="capsLabel">This tape</h2>
+        <div class="tiles">
+          <div class="tile"><span id="videoWpm" class="tileNum">–</span><span class="tileLabel">WPM</span></div>
+          <div class="tile"><span id="videoAcc" class="tileNum">–</span><span class="tileLabel">Accuracy</span></div>
+        </div>
+        <span id="videoStats" class="muted"></span>
+        <div class="missed">
+          <span class="muted">Missed words (<span id="missedCount">0</span>)</span>
+          <ul id="missedList"></ul>
+        </div>
+        <span id="asrInfo"></span>
       </div>
-      <div id="stats">
-        <span>Last line: <b id="lineStats">–</b></span>
-        <span>Video average: <b id="videoStats">–</b></span>
+      <div class="card sideCard">
+        <h2 class="capsLabel">Caption timing</h2>
+        <div class="offsetRow">
+          <button id="offsetDown" class="roundKey" type="button" aria-label="Shift the timing earlier" title="Shift the timing earlier">−</button>
+          <span id="offsetValue">0.00 s</span>
+          <button id="offsetUp" class="roundKey" type="button" aria-label="Shift the timing later" title="Shift the timing later">+</button>
+        </div>
+      </div>
+    </aside>
+
+    <section id="sheet">
+      <div class="sheetHead">
+        <h2>Type what you heard
+          <span id="unclearBadge" class="hidden" title="Whisper was unsure of some words here: the audio may be unclear or misheard. Skipping it with Next doesn't affect your statistics.">unclear audio</span></h2>
+        <span class="sheetStats">Last line · <b id="lineStats">–</b></span>
+      </div>
+
+      <div id="dictation">
+        <div id="lineText" aria-label="Current line, partially revealed"></div>
+      </div>
+
+      <div class="typeRow">
+        <div id="wordBox">
+          <input id="typer" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Type what you hear">
+          <span id="currentWord"></span>
+        </div>
+        <span id="wordStatus" class="hidden" role="status"></span>
+      </div>
+
+      <div class="legend">
+        <span><i class="dot done"></i>Finished</span>
+        <span><i class="dot current"></i>Current word</span>
+        <span><i class="dot hinted"></i>Hinted letter</span>
+        <span class="grow"></span>
+        <span><kbd class="cap small">Tab</kbd>replay</span>
+        <span><kbd class="cap small">⇧Tab</kbd>slow</span>
+        <span><kbd class="cap small">Ctrl H</kbd>hint</span>
+        <span><kbd class="cap small">Ctrl ↵</kbd>accept word</span>
+      </div>
+    </section>
+  </section>
+
+  <!-- Video complete: the last line is finished -->
+  <section id="completeScreen" class="wrap hidden">
+    <div class="completeHead">
+      <div class="completeText">
+        <span id="completeLabel" class="eyebrow"></span>
+        <h1>End of tape.</h1>
+        <p id="completeMeta" class="lead"></p>
+      </div>
+      <div id="completeCassette"></div>
+    </div>
+
+    <div class="card statPanel">
+      <div class="tile big"><span id="doneWpm" class="tileNum">–</span><span class="tileLabel">Words per minute</span></div>
+      <div class="tile big"><span id="doneAcc" class="tileNum">–</span><span class="tileLabel">Accuracy</span></div>
+      <div class="tile big"><span id="doneTime" class="tileNum">–</span><span class="tileLabel">Time typing</span></div>
+      <div class="tile big"><span id="doneMissed" class="tileNum">–</span><span class="tileLabel">Words missed</span></div>
+    </div>
+
+    <div class="wordsPanel">
+      <div class="wordsHead">
+        <h2>Words to listen to again</h2>
+        <span id="doneWordsSummary" class="muted"></span>
+      </div>
+      <div class="tableScroll">
+        <table>
+          <thead><tr><th scope="col">Word</th><th scope="col">Misses</th></tr></thead>
+          <tbody id="doneWords"></tbody>
+        </table>
       </div>
     </div>
 
-    <details id="missedPanel">
-      <summary>Missed words (<span id="missedCount">0</span>)</summary>
-      <ul id="missedList"></ul>
-    </details>
+    <div class="completeActions">
+      <button id="doneHome" class="primary big" type="button"><span class="recDot"></span>Load another tape</button>
+      <button id="doneBack" class="big" type="button">Back to the last line</button>
+    </div>
   </section>
 </main>
 
-<script src="/static/app.js?v=7"></script>
+<script src="/static/app.js?v=8"></script>
 </body>
 </html>

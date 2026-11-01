@@ -1067,3 +1067,26 @@ Sentences marked unclear at each threshold:
   - `curl localhost:8000/?a=1` gave 307 → `http://127.0.0.1:8000/?a=1`, and `127.0.0.1:8000` gave 200
   - headless Firefox opening `http://localhost:8000/static/style.css?v=4` ended at `http://127.0.0.1:8000/static/style.css?v=4`, and opening `/` ended at `http://127.0.0.1:8000/` with the app loaded
 - **Real data after that start:** unchanged. The migration marker still records the 01:12 run; `cache/` has `asr/` and `transcripts/` only; the backup folder holds both browser backups.
+
+## Restyle to the "Booth 07" design (2026-11-01, look only)
+
+Spec and mockups: `new_design/DESIGN.md`, `home.dc.html`, `practice.dc.html`, `video-complete.dc.html` (references only, not copied into the app).
+
+### Changed
+- **`static/style.css`** rewritten: every DESIGN.md token in `:root`, plus named variables for the other mockup colors, so no hard-coded colors are left. Dark theme kept (not in the spec) with my own "booth at night" values.
+- **`index.html`** (`style.css?v=5`, `app.js?v=8`): the three Google Fonts; header with logo, section links (Home), back button + title and volume (Practice), mute and theme buttons; Home hero, "Pick up a tape" cassettes, how-it-works cards, keys grid, footer; Practice console (grille, split-flap counter, tape-deck keys), "This tape" and "Caption timing" cards, answer sheet; a new End-of-tape section.
+- **`static/app.js`**, view code only: cassettes with progress reels, split-flap counter, screen label, tiles, wrong-letter status line, current-word underline, `·` dots, offset shown as `+0.10 s`, icon mute/theme buttons, a 0.75× key (runs the existing Shift+Tab action), and the End-of-tape screen after the last line. The dictation engine, shortcuts, stats, storage and server calls are unchanged.
+- The JS file stays `static/app.js` (README, docs and tests refer to it); it was not renamed to `script.js`.
+
+### Not matched (the app doesn't do it, so it wasn't added)
+- Practice header URL box + Load (loading another video from the practice screen).
+- End of tape: "Practice missed lines", "Rewind and start over", "Hints used", and the Line / "▶ Replay line" columns (the app doesn't record hint counts or which line a word was missed on).
+- Video length on Home cassettes (not stored); "Results →" on a finished cassette is "Open →" since it reopens the video.
+- Spinning reels: no cassette is on screen while a video plays.
+
+### Tests run (real results)
+- pytest: 238 passed (no backend change).
+- Section 15 browser regression (YouTube + upload): 66/68, the same as before; both failures are fullscreen, which headless Firefox refuses.
+- Delete feature browser test: 13/13.
+- New UI checks: 22/23. All passed except one. Cassette reels follow progress; the fonts load; the wrong-letter status appears after 2 misses and clears; the 0.75× key works; finishing the last line opens End of tape, and "Back to the last line" returns; there's no horizontal scroll at 390 px; on a phone the answer sheet comes before the sidebar; the typing box is on screen at 1366×768, 1440×900 and 1920×1080. **Not at 1280×650**, where the video keeps a 320 px minimum width.
+- Contrast: the text pairs pass 4.5:1 except the spec's hidden-letter dots (`--word-hidden` on `--card-inset`, 3.45:1, kept as specified) and the white play icon on orange (3.66:1, an icon, which passes the 3:1 rule for graphics).

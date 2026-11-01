@@ -21,7 +21,7 @@ const PLAY = {
   offsetStep: 0.1,
 };
 const TYPING = {
-  maskChar: "•",
+  maskChar: "·",
   completePauseMs: 600,   // show the finished line this long before moving on
   wrongFlashMs: 400,      // a wrong key shows in red this long
   wrongSpaceMark: "␣",    // how a wrongly typed space appears in the word box
@@ -146,6 +146,7 @@ function startPractice(data, lang, makePlayer, info = {}) {
   state.index = Math.min(state.rec.lineIndex, data.sentences.length - 1);
 
   $("loadScreen").classList.add("hidden");
+  $("completeScreen").classList.add("hidden");
   $("practiceScreen").classList.remove("hidden");
   $("videoTitle").textContent = state.rec.title || data.video_id;
   $("asrInfo").textContent = info.asr || "";
@@ -157,6 +158,37 @@ function startPractice(data, lang, makePlayer, info = {}) {
   focusTyper();
 }
 
+// Finished lines of the current transcript version; the last line finished means "end of tape".
+function finishedLines(rec) {
+  return Object.keys(rec.stats || {}).filter((k) => Number(k) < rec.lineCount).length;
+}
+function reachedEnd(rec) {
+  return rec.lineCount > 0 && !!(rec.stats || {})[rec.lineCount - 1];
+}
+
+// A cassette whose reels show progress: the left reel shrinks and the right one grows as lines
+// are finished. kind: "" (in progress), "done" or "expired" (colors the label).
+const REEL = { min: 22, max: 58 };  // reel diameters in px
+function cassette(title, fraction, kind = "") {
+  const el = document.createElement("div");
+  el.className = "cassette";
+  el.innerHTML = `<div class="cassetteLabel"><span class="cassetteTitle"></span></div>` +
+    `<div class="cassetteWindow" role="img"><span class="reelSlot"><span class="reel"><span></span></span></span>` +
+    `<span class="tapeLine"></span><span class="reelSlot"><span class="reel"><span></span></span></span></div>`;
+  if (kind) el.firstChild.classList.add(kind);
+  el.querySelector(".cassetteTitle").textContent = title;
+  const f = Math.max(0, Math.min(1, fraction || 0));
+  const [left, right] = el.querySelectorAll(".reel");
+  const size = (x) => `${Math.round(REEL.min + (REEL.max - REEL.min) * x)}px`;
+  left.style.width = left.style.height = size(1 - f);
+  right.style.width = right.style.height = size(f);
+  el.querySelector(".cassetteWindow").setAttribute("aria-label", `${Math.round(f * 100)}% of the lines finished`);
+  return el;
+}
+
+const TRASH_ICON = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/>' +
+  '<path d="M6 6l1 15h10l1-15"/><path d="M10 11v6M14 11v6"/></svg>';
+
 function renderRecent() {
   // A video waiting out its undo window is already gone from the list.
   const recs = allVideoRecords().filter((r) => !pendingDelete || r.id !== pendingDelete.rec.id);
@@ -166,12 +198,24 @@ function renderRecent() {
   for (const rec of recs) {
     const li = document.createElement("li");
     const avg = videoAverages(rec);
-    li.innerHTML = `<span class="title"></span><span class="muted"></span><span class="muted"></span>` +
-      `<button class="deleteBtn" type="button" title="Delete this video" aria-label="Delete this video">🗑</button>`;
+    const done = reachedEnd(rec);
+    const tape = cassette(videoName(rec), rec.lineCount ? finishedLines(rec) / rec.lineCount : 0,
+                          rec.expired ? "expired" : done ? "done" : "");
+    const del = Object.assign(document.createElement("button"), {
+      className: "deleteBtn", type: "button", title: "Delete this video", innerHTML: TRASH_ICON });
+    del.setAttribute("aria-label", "Delete this video");
+    tape.firstChild.appendChild(del);
+    const foot = document.createElement("div");
+    foot.className = "cassetteFoot";
+    foot.innerHTML = `<span class="info"></span><span class="go"></span>`;
+    const accText = avg.acc === null ? "–" : `${avg.acc}%`;
+    foot.children[0].textContent = rec.expired ? "File expired, upload it again"
+      : done ? `Done · ${avg.wpm === null ? "–" : avg.wpm} WPM · ${accText}`
+      : `Line ${rec.lineIndex + 1} / ${rec.lineCount}` + (avg.acc === null ? "" : ` · ${accText}`);
+    foot.children[1].textContent = rec.expired ? "" : done ? "Open →" : "Resume →";
+    tape.appendChild(foot);
+    li.appendChild(tape);
     const local = rec.id.startsWith("local:");
-    li.children[0].textContent = rec.title || rec.id;
-    li.children[1].textContent = rec.expired ? "file expired, upload it again" : `line ${rec.lineIndex + 1} of ${rec.lineCount}`;
-    li.children[2].textContent = avg.acc === null ? "no stats yet" : `${avg.acc}% accuracy`;
     li.addEventListener("click", () => {
       $("langInput").value = rec.lang || "en";
       if (local) { openLocalVideo(rec); return; }
@@ -179,7 +223,7 @@ function renderRecent() {
       $("urlInput").value = `https://www.youtube.com/watch?v=${youtubeId}`;
       loadVideo(youtubeId, rec.lang || "en");
     });
-    li.children[3].addEventListener("click", (e) => { e.stopPropagation(); askDelete(rec); });
+    del.addEventListener("click", (e) => { e.stopPropagation(); askDelete(rec); });
     list.appendChild(li);
   }
 }
@@ -312,6 +356,7 @@ $("backBtn").addEventListener("click", () => {
   if (state.player) { state.player.destroy(); state.player = null; state.playerReady = false; state.playerRunning = false; }
   $("asrInfo").textContent = "";
   renderPlayPause(false);
+  $("completeScreen").classList.add("hidden");
   $("player").replaceWith(Object.assign(document.createElement("div"), { id: "player" }));
   $("playerError").classList.add("hidden");
   $("practiceScreen").classList.add("hidden");
@@ -689,6 +734,14 @@ function togglePlay() {
 function renderPlayPause(playing) {
   $("playIcon").classList.toggle("hidden", playing);
   $("pauseIcon").classList.toggle("hidden", !playing);
+  renderScreenLabel();
+}
+
+// The small label on the video, e.g. "SIDE A · LINE 014 · PAUSED".
+function renderScreenLabel() {
+  if (!state.data) return;
+  const playing = !$("pauseIcon").classList.contains("hidden");
+  $("screenLabel").textContent = `SIDE A · LINE ${String(state.index + 1).padStart(3, "0")} · ${playing ? "PLAYING" : "PAUSED"}`;
 }
 
 function watchPlayback() {
@@ -793,6 +846,7 @@ function slotClass(s, i) {
 function renderLine() {
   const box = $("lineText");
   box.textContent = "";
+  const current = currentWord();  // underlined
   let wordEl = null;
   state.slots.forEach((s, i) => {
     const el = document.createElement("span");
@@ -807,7 +861,11 @@ function renderLine() {
       wordEl = null;
       return;
     }
-    if (!wordEl) { wordEl = document.createElement("span"); wordEl.className = "word"; box.appendChild(wordEl); }
+    if (!wordEl) {
+      wordEl = document.createElement("span");
+      wordEl.className = s.word === current ? "word current" : "word";
+      box.appendChild(wordEl);
+    }
     wordEl.appendChild(el);
   });
   renderWordBox();
@@ -828,6 +886,11 @@ function renderWordBox() {
   if (!out.textContent && document.activeElement !== typer) {
     out.appendChild(Object.assign(document.createElement("span"), { className: "placeholder", textContent: "click here to type" }));
   }
+  // Wrong keys on the current letter so far (the letter is revealed at MAX_WRONG_ATTEMPTS).
+  const tries = state.wrongAttempts;
+  $("wordBox").classList.toggle("error", tries > 0);
+  $("wordStatus").classList.toggle("hidden", tries === 0);
+  $("wordStatus").textContent = tries ? `Wrong letter · ${tries} of ${MAX_WRONG_ATTEMPTS} tries before a hint` : "";
 }
 
 function handleTyped(ch) {
@@ -927,15 +990,20 @@ function renderStats(lineEntry) {
   const fmt = (w, a) => `${w === null ? "–" : w} WPM · ${a === null ? "–" : a + "%"}`;
   $("lineStats").textContent = lineEntry ? fmt(wpm(lineEntry.chars, lineEntry.ms), pct(lineEntry.correct, lineEntry.keys)) : "–";
   const avg = videoAverages(state.rec);
-  $("videoStats").textContent = avg.lines ? `${fmt(avg.wpm, avg.acc)} over ${avg.lines} lines` : "–";
+  $("videoWpm").textContent = avg.wpm === null ? "–" : avg.wpm;
+  $("videoAcc").textContent = avg.acc === null ? "–" : `${avg.acc}%`;
+  $("videoStats").textContent = avg.lines ? `Average over ${avg.lines} line${avg.lines === 1 ? "" : "s"}` : "No finished lines yet";
 }
 
-// "N/M" is the current line; the bar fills with finished lines.
+// The split-flap counter is the current line; the bar fills with finished lines.
 function renderProgress() {
   const total = state.data.sentences.length;
-  $("progressCount").textContent = `${state.index + 1}/${total}`;
-  const done = Object.keys(state.rec.stats).filter((k) => Number(k) < total).length;
-  $("progressFill").style.width = `${(100 * done) / total}%`;
+  const digits = String(state.index + 1).padStart(Math.max(3, String(total).length), "0");
+  $("progressCount").replaceChildren(...[...digits].map((d) => Object.assign(document.createElement("span"), { textContent: d })));
+  $("progressCount").setAttribute("aria-label", `Line ${state.index + 1} of ${total}`);
+  $("progressTotal").textContent = `/ ${total}`;
+  $("progressFill").style.width = `${(100 * finishedLines(state.rec)) / total}%`;
+  renderScreenLabel();
 }
 
 function advance() {
@@ -976,8 +1044,50 @@ function completeLine() {
   setTimeout(() => {
     if (state.lineToken !== token) return;  // I already moved elsewhere
     if (state.index + 1 < state.data.sentences.length) goToLine(state.index + 1);
+    else if (!$("practiceScreen").classList.contains("hidden")) showComplete();
   }, TYPING.completePauseMs);
 }
+
+// ---- Video complete ---------------------------------------------------------------------------
+// Shown when the last line is finished. "Back to the last line" returns to practice as it was.
+const MISS_DOTS_MAX = 10;
+function showComplete() {
+  const rec = state.rec, total = state.data.sentences.length, done = finishedLines(rec);
+  const avg = videoAverages(rec);
+  const duration = state.player ? state.player.getDuration() : 0;
+  $("completeLabel").textContent = `Side A · ${done} / ${total} lines finished`;
+  $("completeMeta").textContent = videoName(rec) + (duration ? ` · ${formatTime(duration)}` : "");
+  $("completeCassette").replaceChildren(cassette(videoName(rec), done / total, "done"));
+  $("doneWpm").textContent = avg.wpm === null ? "–" : avg.wpm;
+  $("doneAcc").textContent = avg.acc === null ? "–" : `${avg.acc}%`;
+  const ms = Object.values(rec.stats || {}).concat(rec.archivedStats || []).reduce((sum, s) => sum + s.ms, 0);
+  $("doneTime").textContent = formatTime(ms / 1000);
+  $("doneMissed").textContent = rec.missed.length;
+  const n = rec.missed.length;
+  $("doneWordsSummary").textContent = n ? `${n} word${n === 1 ? "" : "s"}, most missed first` : "";
+  const body = $("doneWords");
+  body.textContent = "";
+  for (const m of [...rec.missed].sort((a, b) => b.count - a.count)) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="word"></td><td><span class="missDots" role="img"></span></td>`;
+    tr.children[0].textContent = m.word;
+    const dots = tr.querySelector(".missDots");
+    dots.setAttribute("aria-label", `${m.count} miss${m.count === 1 ? "" : "es"}`);
+    for (let i = 0; i < Math.min(m.count, MISS_DOTS_MAX); i++) dots.appendChild(document.createElement("i"));
+    if (m.count > MISS_DOTS_MAX) dots.append(`×${m.count}`);
+    body.appendChild(tr);
+  }
+  if (!n) body.innerHTML = `<tr><td colspan="2" class="muted">No missed words on this tape.</td></tr>`;
+  $("practiceScreen").classList.add("hidden");
+  $("completeScreen").classList.remove("hidden");
+  window.scrollTo(0, 0);
+}
+$("doneHome").addEventListener("click", () => $("backBtn").click());
+$("doneBack").addEventListener("click", () => {
+  $("completeScreen").classList.add("hidden");
+  $("practiceScreen").classList.remove("hidden");
+  focusTyper();
+});
 
 // Unrevealed slots of the word under the cursor, optionally including its trailing space.
 function remainingSlotsOfCurrentWord(withSpace) {
@@ -1077,6 +1187,7 @@ $("practiceScreen").addEventListener("mousedown", (e) => {
 $("prevBtn").addEventListener("click", ACTIONS.prevLine);
 $("nextBtn").addEventListener("click", ACTIONS.nextLine);
 $("replayBtn").addEventListener("click", ACTIONS.replay);
+$("slowBtn").addEventListener("click", ACTIONS.replaySlow);
 $("hintBtn").addEventListener("click", ACTIONS.hint);
 $("playPauseBtn").addEventListener("click", togglePlay);
 $("playerShield").addEventListener("click", ACTIONS.replay);
@@ -1100,7 +1211,7 @@ setInterval(() => {
 // ---- Timing offset ------------------------------------------------------------------------
 function renderOffset() {
   const v = state.rec.offset || 0;
-  $("offsetValue").textContent = (v > 0 ? "+" : "") + v.toFixed(1) + "s";
+  $("offsetValue").textContent = `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(2)} s`;
 }
 function changeOffset(delta) {
   const v = Math.round(((state.rec.offset || 0) + delta) * 10) / 10;
@@ -1166,7 +1277,10 @@ function applyVolume() {
 }
 
 function renderSound() {
-  $("muteBtn").textContent = sound.muted ? "🔇" : "🔊";
+  $("soundOnIcon").classList.toggle("hidden", sound.muted);
+  $("soundOffIcon").classList.toggle("hidden", !sound.muted);
+  $("muteBtn").setAttribute("aria-pressed", String(sound.muted));
+  $("muteBtn").title = `Typing sounds ${sound.muted ? "off" : "on"} (Ctrl+M)`;
   $("volume").value = sound.volume;
 }
 
@@ -1176,6 +1290,7 @@ function toggleMute() {
   renderSound();
 }
 
+$("muteBtn").addEventListener("mousedown", (e) => e.preventDefault());  // keep typing focus
 $("muteBtn").addEventListener("click", toggleMute);
 $("volume").addEventListener("input", () => {
   sound.volume = Number($("volume").value);
@@ -1189,7 +1304,11 @@ renderSound();
 // Follows the system setting until the button is used; the choice is then saved.
 const systemDark = matchMedia("(prefers-color-scheme: dark)");
 function currentTheme() { return document.documentElement.dataset.theme || (systemDark.matches ? "dark" : "light"); }
-function renderThemeButton() { $("themeBtn").textContent = currentTheme() === "dark" ? "☀️" : "🌙"; }
+function renderThemeButton() {
+  const dark = currentTheme() === "dark";
+  $("sunIcon").classList.toggle("hidden", !dark);
+  $("moonIcon").classList.toggle("hidden", dark);
+}
 $("themeBtn").addEventListener("mousedown", (e) => e.preventDefault());  // keep typing focus
 $("themeBtn").addEventListener("click", () => {
   const theme = currentTheme() === "dark" ? "light" : "dark";
