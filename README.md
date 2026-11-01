@@ -109,12 +109,9 @@ After editing `style.css` or `app.js`, bump the version in its link in `index.ht
   (`SENTENCE_CLARITY_MIN` in `config.py`) it shows an **unclear audio** badge: the audio may be hard to
   hear, or Whisper may have misheard it, so the exercise may be wrong. Skip it with **Next** if you like:
   only completed sentences count in the statistics, so skipping never affects them.
-- Each sentence plays from 0.4 s before its first word to 0.5 s after its last one
-  (`PAD_BEFORE_SECONDS` / `PAD_AFTER_SECONDS`), plus the **Listening margin** (slider under Caption
-  timing, 0 to 1.5 s, default 0.5 s, remembered for all videos) on both sides. So by default 0.9 s
-  before and 1.0 s after. You may hear a word of the neighbouring sentence; that's on purpose, so
-  the sentence's own first and last words are never cut. If Whisper stretched a sentence's first
-  word back over music, playback starts before the actual words instead (still with the margin).
+- Each sentence plays from 0.1 s before its first word to 0.25 s after its last one
+  (`PAD_BEFORE_SECONDS` / `PAD_AFTER_SECONDS`), but never into the neighbouring sentences. If Whisper
+  stretched a sentence's first word back over music, playback starts closer to the actual words.
 - Letters and digits are hidden as dots. Type the letters and digits of each word, then press
   **Space** to finish the word (the last word of a line needs no space). Punctuation is filled in
   for you, so for "story, of" you type `story`, then Space, then `of`. Case and accents don't matter.

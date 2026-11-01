@@ -114,8 +114,7 @@ def test_restore_puts_the_cache_back_byte_for_byte(root):
 
 def test_routes(root, monkeypatch):
     c = app_module.app.test_client()
-    assert c.get("/api/config").get_json() == {"pad_before": 0.4, "pad_after": 0.5, "margin_default": 0.5,
-                                                 "margin_max": 1.5, "data_format_version": 2}
+    assert c.get("/api/config").get_json() == {"pad_before": 0.1, "pad_after": 0.25, "data_format_version": 2}
     assert c.get("/api/migration").get_json()["needed"] is True
     migration.run()
     r = c.post("/api/migration/browser-backup", json={"items": {"dictation:sound": "{}"}, "origin": "http://localhost:8000"})
