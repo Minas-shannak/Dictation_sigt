@@ -52,6 +52,7 @@ def index():
 def api_config():
     """Playback settings the page needs (all tunable values live in config.py)."""
     return jsonify({"pad_before": config.PAD_BEFORE_SECONDS, "pad_after": config.PAD_AFTER_SECONDS,
+                    "margin_default": config.LISTENING_MARGIN_DEFAULT, "margin_max": config.LISTENING_MARGIN_MAX,
                     "data_format_version": config.DATA_FORMAT_VERSION})
 
 

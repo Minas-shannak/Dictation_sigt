@@ -14,8 +14,10 @@ const SHORTCUTS = {
 const MAX_WRONG_ATTEMPTS = 3;  // wrong keys on one letter before it's revealed automatically
 const SLOW_RATE = 0.75;
 const PLAY = {
-  padBefore: 0.1,     // seconds before the first word and after the last one;
-  padAfter: 0.25,     // replaced by the server's values (config.py) at startup
+  padBefore: 0.4,     // seconds before the first word and after the last one;
+  padAfter: 0.5,      // replaced by the server's values (config.py) at startup
+  marginDefault: 0.5, // "Listening margin" slider: added to both sides, 0 .. marginMax
+  marginMax: 1.5,
   offsetMin: -0.5,
   offsetMax: 0.5,
   offsetStep: 0.1,
@@ -348,6 +350,9 @@ async function migrateOldData() {
 fetch("/api/config").then((r) => r.json()).then((c) => {
   PLAY.padBefore = c.pad_before;
   PLAY.padAfter = c.pad_after;
+  PLAY.marginDefault = c.margin_default;
+  PLAY.marginMax = c.margin_max;
+  renderMargin();
 }).catch(() => {});
 migrateOldData().finally(renderRecent);
 
@@ -684,20 +689,21 @@ function stopPlaybackClock() {
   state.playingSince = null;
 }
 
-// The part of the video a sentence plays: padded a little (word timestamps are estimates),
-// but never into the previous sentence's last word or the next one's first word. It starts
-// at play_start, which is later than start when Whisper stretched the first word over the
-// music before it. The per-video offset applies on top.
+// The part of the video a sentence plays: padded (word timestamps are estimates) plus the
+// listening margin on both sides. Not clamped to the neighbouring sentences: hearing one of
+// their words is fine, a cut word is not. It starts before play_start, which is later than
+// start when Whisper stretched the first word over the music before it, so playback never
+// starts right on the first word. The per-video offset applies on top.
 function lineWindow(i) {
-  const list = state.data.sentences;
-  const s = list[i], prev = list[i - 1], next = list[i + 1];
-  let from = (s.play_start ?? s.start) - PLAY.padBefore;
-  let to = s.end + PLAY.padAfter;
-  if (prev) from = Math.max(from, prev.end);
-  if (next) to = Math.min(to, next.start);
-  to = Math.max(to, s.end);  // overlapping timestamps: never cut this sentence's own last word
+  const s = state.data.sentences[i];
+  const margin = listeningMargin();
   const offset = state.rec.offset || 0;
-  return { from: Math.max(0, from + offset), to: to + offset };
+  const from = (s.play_start ?? s.start) - PLAY.padBefore - margin + offset;
+  let to = s.end + PLAY.padAfter + margin + offset;
+  // Past the end of the video it would never reach `to` and never count as finished.
+  const duration = state.player && state.playerReady ? state.player.getDuration() : 0;
+  if (duration > 0) to = Math.min(to, duration);
+  return { from: Math.max(0, from), to };
 }
 
 function playLine(i, rate = 1) {
@@ -1221,6 +1227,25 @@ function changeOffset(delta) {
 }
 $("offsetDown").addEventListener("click", () => changeOffset(-PLAY.offsetStep));
 $("offsetUp").addEventListener("click", () => changeOffset(PLAY.offsetStep));
+
+// ---- Listening margin -----------------------------------------------------------------------
+// Extra seconds before and after every sentence, for all videos; remembered in the browser.
+function listeningMargin() {
+  const v = loadJSON("listening", {}).margin;
+  return typeof v === "number" ? Math.max(0, Math.min(PLAY.marginMax, v)) : PLAY.marginDefault;
+}
+function renderMargin() {
+  const v = listeningMargin();
+  $("margin").max = PLAY.marginMax;
+  $("margin").value = v;
+  $("marginValue").textContent = `${v.toFixed(1)} s`;
+}
+$("margin").addEventListener("input", () => {
+  saveJSON("listening", { margin: Math.round(Number($("margin").value) * 10) / 10 });
+  renderMargin();
+});
+$("margin").addEventListener("change", focusTyper);  // hand the keyboard back after dragging
+renderMargin();
 
 // ---- Typing sounds ---------------------------------------------------------------------------
 // Files are decoded once into AudioBuffers; each event plays a new AudioBufferSourceNode,

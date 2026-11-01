@@ -348,6 +348,9 @@
   .roundKey { width: 46px; height: 46px; min-height: 0; padding: 0; border-radius: 50%; border: 1px solid var(--kbd-edge); border-bottom-width: 4px;
               background: var(--input-bg); font-size: 20px; font-weight: 400; }
   .roundKey:active { transform: translateY(2px); border-bottom-width: 2px; }
+  .marginRow { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; font-size: 14px; color: var(--ink-2); }
+  #marginValue { font: 600 14px "JetBrains Mono", monospace; color: var(--ink); }
+  #margin { grid-column: 1 / -1; width: 100%; }
   #offsetValue { flex: 1 1 auto; text-align: center; font: 600 18px "JetBrains Mono", monospace; }
 
   /* The answer sheet */

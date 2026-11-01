@@ -20,7 +20,12 @@ Answers to the Phase 1 open questions. These are **\[Decided\]** items.
 
 1. **Python:** the project venv uses Python 3.12, created with `uv`. Do not use 3.14. Network access for pip is allowed.
 2. **GPU libraries:** CUDA libraries (cuBLAS, cuDNN) are installed as pip packages inside the venv only, together with faster-whisper, yt-dlp and num2words. Use versions that support Blackwell (CUDA 12.8 or newer) and match the installed ctranslate2. Pin the working versions in `requirements.txt`. The GPU counts as working only after a real transcription runs on it and `nvidia-smi` shows the process.
-3. **Padding:** `pad_before` 0.1 s and `pad_after` 0.25 s with clamping, replacing the old 0.2 s / 0.15 s. Keep them configurable; tune after real tests.
+3. **Padding (revised Nov 1, 2026 after real use; replaces "0.1 s / 0.25 s with clamping"):** for a beginner a cut word is much worse than hearing an extra word from the neighbouring sentence.
+   - **Overlap allowed:** no clamping at the neighbouring sentences; hearing the next sentence's first word at the end, or the previous one's last word at the start, is fine. Stored timestamps stay unchanged; playback only.
+   - **Defaults:** `pad_before` 0.4 s, `pad_after` 0.5 s (configurable).
+   - **"Listening margin"** slider in the UI next to the timing offset: 0 to 1.5 s, default 0.5 s, remembered in the browser (all videos). It is **added** to the padding on both sides, so the default plays 0.9 s before and 1.0 s after; at 0 exactly the padding.
+   - **`play_start`** (stretched first words) is kept, and `pad_before` + margin always apply before it, so playback never starts exactly on the first word.
+   - **YouTube start latency** was measured (PROGRESS.md): no audio is lost after seekTo + play, so there is no YouTube-only compensation.
 4. **Clean start:** back up first, then clear per-video progress, statistics (WPM/accuracy history, missed words), recent videos and the old cache. Keep sound and theme settings. Reset the timing offset to 0.
 5. **Language box:** kept and passed to Whisper. Prefilled with "en"; empty means auto-detect. The language is part of the layer-1 cache key.
 6. **Upload limit:** 2 GB.
@@ -370,11 +375,11 @@ This is one of the highest priorities. Timing must come from the audio itself.
 
 Whisper word timestamps are estimates and can be off by roughly 0.1–0.3 s, especially on the last word of a sentence. If playback stops exactly at `end`, the last word may be cut off.
 
-- Add configurable padding at playback time: `pad_before` (default about 0.1 s) and `pad_after` (default about 0.25 s).
-- Clamp padding so a sentence never plays into the next sentence's first word or before the previous sentence's end.
+- Add configurable padding at playback time: `pad_before` (default 0.4 s) and `pad_after` (default 0.5 s), plus the user's "Listening margin" on both sides (decision 3).
+- **\[Decided\]** No clamping: a sentence may play into the neighbouring sentences' words (decision 3, revised).
 - **\[Decided\]** Stretched first words: after music or a pause Whisper sometimes stretches a sentence's first word back over the music (movie clip: "they're" starts 6 s early). Processing (layer 2) adds a per-sentence `play_start` that may only be *later* than the stored `start`, never earlier. Stored word timestamps never change, every adjustment is logged, and the "they're" case is a test. Phase 7.
 - Apply padding in the player logic only. Stored timestamps stay unpadded.
-- Keep the existing timing offset feature; it applies on top of padding.
+- Keep the existing timing offset feature; it applies on top of padding and margin.
 
 ### C. One player interface
 

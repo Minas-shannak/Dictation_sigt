@@ -189,10 +189,15 @@ BACKUP_DIR = BASE_DIR / "backup"
 
 # --- Playback (sent to the page) ------------------------------------------------
 # Whisper's word timestamps are estimates, so each sentence plays a little before its
-# first word and after its last one; clamped so it never plays into a neighbouring
-# sentence. The per-video timing offset is applied on top.
-PAD_BEFORE_SECONDS = 0.1
-PAD_AFTER_SECONDS = 0.25
+# first word (before play_start when the first word was stretched) and after its last one.
+# Not clamped: hearing a word of the neighbouring sentence is fine, a cut word is not.
+# Stored timestamps never change; this is playback only. The page's "Listening margin"
+# slider adds the same amount to both sides (remembered in the browser), and the per-video
+# timing offset applies on top of everything.
+PAD_BEFORE_SECONDS = 0.4
+PAD_AFTER_SECONDS = 0.5
+LISTENING_MARGIN_DEFAULT = 0.5                      # seconds, slider default
+LISTENING_MARGIN_MAX = 1.5                          # slider range is 0 .. this, step 0.1
 
 # --- Background jobs (services/jobs.py) ---------------------------------------
 FINISHED_JOBS_KEPT = 50                             # finished jobs stay queryable until this many newer ones finish
