@@ -15,11 +15,12 @@ import difflib
 import logging
 import re
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from num2words import num2words
 
 import config
+from ai.punctuation import restore_unpunctuated
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ SETTING_NAMES = [
     "SENTENCE_MAX_WORDS", "SENTENCE_MAX_SECONDS", "SENTENCE_MIN_WORDS", "STANDALONE_EXPRESSIONS",
     "SINGLE_WORD_MERGE_SECONDS", "SENTENCE_PAUSE_SECONDS",
     "SENTENCE_LONG_SILENCE_SECONDS", "SENTENCE_SPLIT_PAUSE_SECONDS", "SENTENCE_SPLIT_BEFORE_WORDS",
+    "SENTENCE_FIXED_PHRASES",
     "SENTENCE_CLARITY_MIN", "STRETCHED_FIRST_WORD_SECONDS",
     "TITLE_ABBREVIATIONS", "ABBREVIATIONS",
 ]
@@ -361,28 +363,45 @@ def _gap(a: Dict, b: Dict) -> float:
     return b["start"] - a["end"]
 
 
-def _split_point(piece: List[Dict], s: Dict) -> Optional[int]:
-    """Where to split an over-long piece (see SENTENCE_SPLIT_* in config for the order)."""
+def _inside_fixed_phrases(piece: List[Dict], s: Dict) -> set:
+    """Split positions k that fall inside a fixed phrase ("bits | and pieces")."""
+    plain = [_plain(w["word"]) for w in piece]
+    inside = set()
+    for phrase in s["sentence_fixed_phrases"]:
+        parts = phrase.lower().split()
+        for i in range(len(plain) - len(parts) + 1):
+            if plain[i:i + len(parts)] == parts:
+                inside.update(range(i + 1, i + len(parts)))
+    return inside
+
+
+def _split_point(piece: List[Dict], s: Dict) -> Optional[Tuple[int, str]]:
+    """Where to split an over-long piece, and why (see SENTENCE_SPLIT_* in config for the order).
+
+    Returns (k, reason): k = index of the first word of the second part.
+    """
     n, min_words = len(piece), s["sentence_min_words"]
-    # k = index of the first word of the second part. Never between words made from one
-    # token ("one hundred | and fifty" from "150"): that would split a word.
-    allowed = [k for k in range(min_words, n - min_words + 1) if piece[k]["source"] != piece[k - 1]["source"]]
+    # At least min_words on each side. Never between words made from one token
+    # ("one hundred | and fifty" from "150": that would split a word), never inside a fixed phrase.
+    fixed = _inside_fixed_phrases(piece, s)
+    allowed = [k for k in range(min_words, n - min_words + 1)
+               if piece[k]["source"] != piece[k - 1]["source"] and k not in fixed]
     if not allowed:
         return None
     middle = n / 2
     commas = [k for k in allowed if piece[k - 1]["word"].rstrip("\"')]").endswith((",", ";", ":"))]
     if commas:
-        return min(commas, key=lambda k: abs(k - middle))
+        return min(commas, key=lambda k: abs(k - middle)), "max-length:comma"
     pauses = [k for k in allowed if _gap(piece[k - 1], piece[k]) >= s["sentence_split_pause_seconds"]]
     if pauses:
-        return max(pauses, key=lambda k: (_gap(piece[k - 1], piece[k]), -abs(k - middle)))
+        return max(pauses, key=lambda k: (_gap(piece[k - 1], piece[k]), -abs(k - middle))), "max-length:pause"
     joining = s["sentence_split_before_words"]
     # Before the first of consecutive joining words: "girl | but if you're", not "girl but | if".
     joiners = [k for k in allowed
                if _plain(piece[k]["word"]) in joining and _plain(piece[k - 1]["word"]) not in joining]
     if joiners:
-        return min(joiners, key=lambda k: abs(k - middle))
-    return max(allowed, key=lambda k: (_gap(piece[k - 1], piece[k]), -abs(k - middle)))
+        return min(joiners, key=lambda k: abs(k - middle)), "max-length:joining-word"
+    return max(allowed, key=lambda k: (_gap(piece[k - 1], piece[k]), -abs(k - middle))), "max-length:longest-gap"
 
 
 def _too_long(piece: List[Dict], s: Dict) -> bool:
@@ -390,34 +409,44 @@ def _too_long(piece: List[Dict], s: Dict) -> bool:
             or piece[-1]["end"] - piece[0]["start"] > s["sentence_max_seconds"])
 
 
-def _split_long(piece: List[Dict], s: Dict) -> List[List[Dict]]:
+def _split_long(piece: List[Dict], reason: str, s: Dict) -> List[Tuple[List[Dict], str]]:
+    """(words, split_reason) parts; the reason is why each part ends where it does."""
     if not _too_long(piece, s):
-        return [piece]
-    k = _split_point(piece, s)
-    if k is None:
-        return [piece]
-    return _split_long(piece[:k], s) + _split_long(piece[k:], s)
+        return [(piece, reason)]
+    split = _split_point(piece, s)
+    if split is None:
+        return [(piece, reason)]
+    k, why = split
+    return _split_long(piece[:k], why, s) + _split_long(piece[k:], reason, s)
 
 
-def _segment_run(run: List[Dict], s: Dict) -> List[List[Dict]]:
-    """Split one run of words (no excluded segment inside it) into sentences."""
-    pieces: List[List[Dict]] = []
+def _segment_run(run: List[Dict], s: Dict) -> List[Tuple[List[Dict], str]]:
+    """Split one run of words (no excluded segment inside it) into sentences.
+
+    Returns (words, split_reason) pairs. split_reason says why the sentence ends there:
+    "punctuation", "pause" (a pause in unpunctuated text, or a long silence), one of
+    "max-length:comma|pause|joining-word|longest-gap", or "end" (end of the transcript or
+    of the words before an excluded segment).
+    """
+    found: List[Tuple[List[Dict], str]] = []
     cur: List[Dict] = []
     for i, w in enumerate(run):
         if cur:
             gap = _gap(cur[-1], w)
             if gap >= s["sentence_long_silence_seconds"] or (
                     gap >= s["sentence_pause_seconds"] and not cur[-1]["punctuated"]):
-                pieces.append(cur)
+                found.append((cur, "pause"))
                 cur = []
         cur.append(w)
         if _ends_sentence(w, run[i + 1] if i + 1 < len(run) else None, s):
-            pieces.append(cur)
+            found.append((cur, "punctuation"))
             cur = []
     if cur:
-        pieces.append(cur)
+        found.append((cur, "end"))
 
-    pieces = [part for p in pieces for part in _split_long(p, s)]
+    split = [part for p, reason in found for part in _split_long(p, reason, s)]
+    pieces = [p for p, _ in split]
+    reasons = [r for _, r in split]
 
     # Merge fragments that are too short into the closer neighbour.
     # - One word: a standalone expression ("Okay,", "Well") stays alone; any other word
@@ -446,21 +475,26 @@ def _segment_run(run: List[Dict], s: Dict) -> List[List[Dict]]:
             i += 1
             continue
         _, side = min(options)
+        # The merged sentence ends where the later of the two ended.
         if side == -1:
             pieces[i - 1] = pieces[i - 1] + p
-            del pieces[i]
+            reasons[i - 1] = reasons[i]
         else:
             pieces[i + 1] = p + pieces[i + 1]
-            del pieces[i]
-    return pieces
+        del pieces[i], reasons[i]
+    return list(zip(pieces, reasons))
 
 
 # --- Pipeline ---------------------------------------------------------------------
 
-def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
+def process_transcript(raw: Dict, settings: Optional[Dict] = None,
+                       punctuate: Optional[Callable[[List[str]], List[str]]] = None) -> Dict:
     """Raw transcriber result -> training transcript with timed sentences.
 
     settings: overrides for default_settings() (lowercase config names).
+    punctuate: EXPERIMENT, not used by the app. A restorer (see ai/punctuation.py) applied to
+    the stretches Whisper left unpunctuated, just before segmentation; it can only add
+    punctuation and capitalization.
     """
     s = resolve_settings(settings)
     segments = raw.get("segments") or []
@@ -478,7 +512,7 @@ def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
 
     n_annotations = n_fillers = 0
     left_as_is: List[str] = []
-    pieces: List[List[Dict]] = []
+    pieces: List[Tuple[List[Dict], str]] = []
     for run in runs:
         _capitalize_i(run)
         a, f = _clean(run, s)
@@ -486,10 +520,12 @@ def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
         n_fillers += f
         if s["numbers_to_words"]:
             left_as_is += _numbers_to_words(run)
+        if punctuate:
+            log.info("Punctuation restored: %d words changed", restore_unpunctuated(run, punctuate))
         pieces += _segment_run(run, s) if run else []
 
     sentences = []
-    for p in pieces:
+    for p, split_reason in pieces:
         if not any(re.search(r"\w", w["word"]) for w in p):
             continue  # punctuation only: nothing to type
         # Clarity: the mean word probability. Low values mark speech that is hard to hear
@@ -511,6 +547,7 @@ def process_transcript(raw: Dict, settings: Optional[Dict] = None) -> Dict:
             "play_start": play_start,
             "clarity": clarity,
             "unclear": clarity < s["sentence_clarity_min"],
+            "split_reason": split_reason,
             "words": [{k: w[k] for k in ("word", "start", "end", "probability", "source")} for w in p],
         })
 

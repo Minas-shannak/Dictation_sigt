@@ -15,6 +15,7 @@ Update this file at the end of every phase. Commit after every phase.
 | 6. Replace the YouTube caption pipeline | Done, approved |
 | 7. Integrate with the dictation engine | Done, **waiting for review** (manual checklist below) |
 | 8. Test and fix regressions | Done, **waiting for review**: 1 failed item (last/first word cut where sentences touch), see below |
+| Segmentation follow-up ("bits \| and pieces") | Done; punctuation-restoration experiment **waiting for your decision**, see the last section |
 
 ## Phase 1: Inspection (Oct 31, 2026)
 
@@ -1187,3 +1188,103 @@ The flagged sentences:
 
 ### Files changed
 - `docs/PROGRESS.md` only. The test drivers are in the scratchpad: `p8b.py`, `dplay.py`, `dcheck.py`, `p8reg.py`, `p8mig.py`.
+
+## Segmentation follow-up: "bits | and pieces" (Nov 3, 2026)
+
+Real use, movie clip (5KsVamgPkOE, large-v3-turbo): "…picking up bits" / "and pieces of course…". Layer 2 only; nothing was retranscribed. `PROCESSING_VERSION` 7 → 8, so cached transcripts are rebuilt from layer 1 on the next load.
+
+### 1. `split_reason` per sentence (layer 2 and CLI)
+Each sentence records why it ends where it does: `punctuation`, `pause` (a pause in unpunctuated text, or a long silence), `max-length:comma`, `max-length:pause`, `max-length:joining-word`, `max-length:longest-gap`, or `end` (end of the transcript, or of the words before an excluded segment). A merged fragment passes its reason on. `python -m ai.cli <raw.json>` prints it after each sentence as `<reason>`. Saved progress is not affected by the new field: `transcript_version` hashes only the sentence texts.
+
+**Cause confirmed, with one correction.** The cut was `max-length:joining-word`: turbo wrote no punctuation, so the 30 s stretch was one piece, and the max-length split chose the "and" nearest the middle. The correction: the speech does have pauses, but Whisper put them inside the next word instead of between words. Every gap here is 0, while "what" lasts 65.70–67.26 s (1.56 s) and "but" 73.08–74.04 s. So the pause rules never see them.
+
+### 2. Joining-word rule
+- **Fixed phrases:** new `SENTENCE_FIXED_PHRASES` in config. It has your 10 phrases plus 27 more, e.g. "over and over", "sooner or later", "and so on", "even if", "can't help but". A split never falls inside one, for any split kind. They are matched on whole words, ignoring case and punctuation.
+- **Middle candidate and minimum words:** these already existed. A joining-word split takes the candidate nearest the middle, and every split leaves at least `SENTENCE_MIN_WORDS` (3) words on each side. There are tests for both now.
+- **Reach:** across the 5 fixtures and the 4 cached real videos (1,620 sentences), the rule changes **only this one spot**.
+- **This clip on its own isn't fixed yet.** With "and" ruled out, nothing else qualifies, so the split falls back to `longest-gap`. All gaps are 0, so that means the middle:
+
+| Before (v7) | After (v8) |
+| --- | --- |
+| you know I can't help | you know I can't help but notice you seem |
+| but notice you seem a little at war with | a little at war with yourself here what now I'm |
+| yourself here what now I'm only picking up bits | only picking up bits and pieces of course overprotective |
+| and pieces of course overprotective mother forbidden road trip I mean this is serious stuff | mother forbidden road trip I mean this is serious stuff |
+
+- **Not adopted, a measurement only:** a scratch test treated a word's excess length (beyond 0.25 s + 0.09 s per letter) as a pause before it. It produced "…at war with yourself here" / "what now I'm only picking up bits and pieces of course" / "overprotective mother … serious stuff". Worth considering; your call.
+
+### 3. Experiment: punctuation restoration (NOT adopted)
+- **Model:** `1-800-BAD-CODE/punctuation_fullstop_truecase_english`. It adds punctuation (. , ?) and capitals and finds sentence boundaries; English only.
+- **License:** Apache-2.0.
+- **Download:** 210 MB (ONNX file `punct_cap_seg_en.onnx`, sha256 `dd922d45…1421b`, plus a 0.6 MB SentencePiece model).
+- **Extra dependencies:**
+  - On the CPU: only `sentencepiece` (about 1.3 MB). `onnxruntime` is already in requirements.txt for the VAD filter.
+  - On the GPU: `onnxruntime-gpu` with its CUDA 13 + cuDNN 9 libraries, about **2 GB** more. The project has only CUDA 12 cuBLAS.
+  - The model's own `punctuators` package needs PyTorch, so I didn't use it; a 100-line ONNX runner does the same job.
+- **Speed:**
+
+| | Load | Movie clip, 372 words | Conversation clip, 658 words |
+| --- | --- | --- | --- |
+| CPU | 0.4 s | 0.06 s | 0.13 s |
+| GPU (warm) | 0.7 s | 0.006 s | 0.011 s |
+
+  The first GPU call takes 0.27 s (warm-up). The CPU is fast enough, so the GPU isn't worth 2 GB. GPU and CPU differ slightly: 80 vs 81 sentences on the conversation clip in an earlier run.
+- **How it works:** `ai/punctuation.py` applies it only to stretches Whisper left unpunctuated, after numbers-to-words and before segmentation, in the training transcript only. It runs only when a restorer is passed to `process_transcript(…, punctuate=…)`, and the app never passes one.
+  - **Rebuilt from the original:** every word is rebuilt from its own characters, keeping only a capital on a sentence's first word and one mark (. , ? !) on a word that has none. A restorer therefore cannot change, add or remove words, and each result is checked again (`only_punctuation_and_case_added`).
+  - **Context:** the model also sees 8 words on each side as context. Without them it ended every stretch with a period ("took part in every." / "extracurricular…").
+  - **No mid-sentence capitals:** these are dropped because the model title-cases ("Mother Forbidden Road Trip").
+  - **Tests:** `tests/test_punctuation.py` (12 tests) uses fake restorers that try to change, add, drop or lowercase words.
+  - **Checked on the real output:** words and timestamps are identical before and after on both clips.
+- **Effect:** guessed cuts (`joining-word` + `longest-gap`):
+  - movie: 28 of 78 sentences → 2 of 79
+  - conversation: 53 of 69 → 10 of 79
+
+**Movie clip, 60–82 s:**
+
+| Before (v8) | After |
+| --- | --- |
+| you know I can't help but notice you seem | You know, I can't help but notice you seem |
+| a little at war with yourself here what now I'm | a little at war with yourself here, what now? |
+| only picking up bits and pieces of course overprotective | I'm only picking up bits and pieces, of course. Overprotective. |
+| mother forbidden road trip I mean this is serious stuff | Mother forbidden road trip. |
+| but let me ease your conscience this is part of | I mean, this is serious stuff, but let me ease your conscience. |
+| growing up a little rebellion a little adventure that's good healthy | This is part of growing up a little rebellion, a little adventure that's good, healthy, |
+
+**Conversation clip (tests/fixtures/conversation.json), selection:**
+
+| Before (v8) | After |
+| --- | --- |
+| I think adults being naughty is different to being a criminal yes yes / whereas because if you break the rules at / school you're a naughty boy you're a naughty girl | I think adults being naughty is different to being a criminal? / Yes, yes, whereas because if you break the rules at school, / you're a naughty boy, you're a naughty girl. |
+| but I did hang around as an adult I / did hang around with some of the naughty kids. | but I did hang around as an adult. / I did hang around with some of the naughty kids. |
+| and of course I protested I was like it's not mine it's not mine / but I had it in my hand do you think your friends saw the teacher coming | even though it wasn't my cigarette, and of course I protested. / I was like, it's not mine, it's not mine, but I had it in my hand. / Do you think your friends saw the teacher coming? |
+| and suspended maybe three times you were suspended three times what on / earth did you do to get suspended for a whole week well | and suspended maybe three times you were suspended three times. / What on earth did you do to get suspended for a whole week? |
+| or someone quite senior in the teaching staff walked around the corner | like the head of department or someone quite senior in the teaching. / Staff walked around the corner and literally caught me red-handed, |
+
+**Mistakes it makes:**
+- "teaching. / Staff walked" (split inside "teaching staff")
+- "Overprotective." as its own sentence
+- "you know I didn't. / I didn't mind…"
+- "were you a teacher's pet? / Back at school?"
+- a sentence ending in a comma when the max-length split takes the comma
+
+The full output is in the scratchpad (`punct/conversation_before_after.txt`). To rerun: `tests/tools/punctuation_experiment.py` (instructions at its top).
+
+### Files changed
+- `config.py`: `SENTENCE_FIXED_PHRASES`, `PROCESSING_VERSION` 8.
+- `ai/transcript_processor.py`:
+  - `split_reason`
+  - the fixed-phrase rule
+  - the optional `punctuate` hook (off)
+- `ai/cli.py`: prints the reason.
+- `ai/punctuation.py`: new (the experiment's guard).
+- Tests:
+  - `tests/test_transcript_processor.py`: 5 new tests.
+  - `tests/test_punctuation.py`: new, 12 tests.
+  - `tests/test_transcript_cache.py`: new sentence field.
+- `tests/tools/punctuation_experiment.py`: new, needs a separate venv.
+
+### Tests run
+- `pytest tests/`: **255 passed** (238 before this work, plus 5 segmentation tests and 12 punctuation tests).
+- The experiment ran on the real movie clip (a copy of your cache) and the conversation fixture, on both CPU and GPU.
+- The app was not started for this change; the browser tests were not rerun.
+

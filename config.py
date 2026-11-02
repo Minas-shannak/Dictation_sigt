@@ -45,7 +45,7 @@ INITIAL_PROMPT = ""
 
 # --- Transcript processing (ai/transcript_processor.py) ----------------------
 # Bump whenever processing logic changes in a way that changes the sentences.
-PROCESSING_VERSION = 7
+PROCESSING_VERSION = 8
 
 # Hallucination filter. A segment is excluded from the training transcript (but
 # kept in the raw result) if any rule matches. The defaults for the first two
@@ -144,6 +144,17 @@ STRETCHED_FIRST_WORD_SECONDS = 1.0
 SENTENCE_SPLIT_PAUSE_SECONDS = 0.3
 SENTENCE_SPLIT_BEFORE_WORDS = {"and", "but", "because", "so", "or", "when", "which", "then", "while",
                                "although", "though", "whereas", "if", "until", "unless", "before", "after"}
+# An over-long sentence is never split inside one of these (movie clip: "picking up bits | and
+# pieces"). Matched on whole words, case and punctuation ignored.
+SENTENCE_FIXED_PHRASES = [
+    "bits and pieces", "back and forth", "pros and cons", "more and more", "up and down",
+    "here and there", "now and then", "safe and sound", "black and white", "on and off",
+    "over and over", "again and again", "once and for all", "sooner or later", "more or less",
+    "give or take", "rock and roll", "ladies and gentlemen", "trial and error", "by and large",
+    "odds and ends", "loud and clear", "first and foremost", "time and again", "out and about",
+    "far and wide", "each and every", "and so on", "and so forth", "or so", "if only", "what if",
+    "even if", "even though", "as if", "only if", "can't help but",
+]
 # Abbreviations that don't end a sentence (titles never do; the rest only before a lowercase word).
 TITLE_ABBREVIATIONS = {"mr.", "mrs.", "ms.", "dr.", "prof."}
 ABBREVIATIONS = {"st.", "jr.", "sr.", "vs.", "etc.", "e.g.", "i.e.", "a.m.", "p.m.", "u.s.", "u.k.", "approx."}

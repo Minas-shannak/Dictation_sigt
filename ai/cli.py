@@ -19,7 +19,7 @@ from ai.transcript_processor import process_transcript
 
 def print_sentences(processed: dict, words: bool) -> None:
     for st in processed["sentences"]:
-        print(f"{st['index']:4} [{st['start']:7.2f} -> {st['end']:7.2f}] {st['text']}")
+        print(f"{st['index']:4} [{st['start']:7.2f} -> {st['end']:7.2f}] {st['text']}  <{st['split_reason']}>")
         if words:
             print("       " + " ".join(f"{w['word']}({w['start']:.2f}-{w['end']:.2f})" for w in st["words"]))
     for e in processed["excluded"]:

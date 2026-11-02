@@ -230,6 +230,64 @@ def test_long_sentence_without_comma_or_pause_split_before_a_joining_word():
     assert texts(r) == ["I was a good girl at school", "because I did all the clubs and took part in everything"]
 
 
+def test_long_sentence_is_never_split_inside_a_fixed_phrase():
+    # Movie clip, turbo, no punctuation, no gaps: the joining word nearest the middle was the
+    # "and" of "bits and pieces".
+    text = "what now I'm only picking up bits and pieces of course overprotective mother forbidden road trip"
+    r = process_transcript(raw_of(seg(timed(text))), {"sentence_max_words": 12})
+    assert not any(t.endswith("bits") for t in texts(r))
+    assert any("bits and pieces" in t for t in texts(r))
+    r = process_transcript(raw_of(seg(timed(text))), {"sentence_max_words": 12, "sentence_fixed_phrases": []})
+    assert texts(r)[0].endswith("picking up bits")  # the old behaviour, for comparison
+
+
+def test_fixed_phrases_match_whole_words_ignoring_case_and_punctuation():
+    text = "we kept walking Back, and forth across the square until the sun finally went down behind the hills"
+    r = process_transcript(raw_of(seg(timed(text))), {"sentence_max_words": 12})
+    assert any("Back, and forth" in t for t in texts(r))
+    # "backpack and" is not "back and".
+    r = process_transcript(raw_of(seg(timed("I left my backpack and forth went the others to the old shop on the corner"))),
+                           {"sentence_max_words": 12})
+    assert texts(r)[0] == "I left my backpack"
+
+
+def test_a_split_keeps_at_least_min_words_on_each_side():
+    for text in ("and so we went to the shop and bought some bread and milk and eggs and butter and",
+                 "we went and then and so and but and if and or and when we came home again"):
+        r = process_transcript(raw_of(seg(timed(text))), {"sentence_max_words": 8})
+        assert all(len(t.split()) >= 3 for t in texts(r)), texts(r)
+
+
+def test_every_sentence_records_why_it_ends_there():
+    r = process_transcript(raw_of(seg(timed("Hello there, how are you?", 0.0)),                    # punctuation
+                                  seg(timed("so we went to the shop", 2.0)                          # pause (unpunctuated)
+                                      + timed("and walked all the way home because the shop was closed", 4.5))),
+                           {"sentence_max_words": 8})                                               # max-length, then end
+    assert [(s["text"], s["split_reason"]) for s in r["sentences"]] == [
+        ("Hello there, how are you?", "punctuation"),
+        ("so we went to the shop", "pause"),
+        ("and walked all the way home", "max-length:joining-word"),
+        ("because the shop was closed", "end"),
+    ]
+    r = process_transcript(raw_of(seg(timed("When we got there, the shop was closed, so we walked back home in the rain."))),
+                           {"sentence_max_words": 8})
+    assert r["sentences"][0]["split_reason"] == "max-length:comma"
+    tokens = timed("we walked to the old shop on the corner", 0.0, 0.25) + timed("to buy some bread and milk", 3.0, 0.25)
+    r = process_transcript(raw_of(seg(tokens)), {"sentence_max_words": 12, "sentence_long_silence_seconds": 9})
+    assert r["sentences"][0]["split_reason"] in ("pause", "max-length:pause")
+    r = process_transcript(raw_of(seg(timed("one two three four five six seven eight nine ten eleven twelve"))),
+                           {"sentence_max_words": 8, "numbers_to_words": False})
+    assert r["sentences"][0]["split_reason"] == "max-length:longest-gap"
+
+
+def test_a_merged_fragment_passes_its_split_reason_on():
+    # "No" (not a standalone expression here) joins the sentence before it; the merged
+    # sentence ends where "No" ended: at the end of the transcript.
+    r = process_transcript(raw_of(seg(timed("I went to the shop.") + timed("Bread", 1.6))),
+                           {"standalone_expressions": []})
+    assert [(s["text"], s["split_reason"]) for s in r["sentences"]] == [("I went to the shop. Bread", "end")]
+
+
 def test_max_seconds_also_splits():
     r = process_transcript(raw_of(seg(timed("one two three four five six seven eight", step=1.5))),
                            {"sentence_max_seconds": 6.0, "numbers_to_words": False})
