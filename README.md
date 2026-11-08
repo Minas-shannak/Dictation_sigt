@@ -1,239 +1,327 @@
 # Dictation
 
-Practice dictation with YouTube videos: paste a link, hear one sentence at a time, type what you hear.
+A local web app for practising listening and typing: you give it a video, it plays one sentence at a time, and you type what you hear.
 
-## Setup
+---
 
-Uses Python 3.12 in a venv made with [uv](https://docs.astral.sh/uv/), and FFmpeg from the system.
+## 1. Project Overview
 
-```bash
-sudo apt install ffmpeg            # provides ffmpeg and ffprobe
-cd typing-app
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r requirements.txt
-source .venv/bin/activate
+### What is it?
+
+Dictation turns any YouTube video, or a video file of your own, into a typing exercise. The app plays a short sentence from the video, you type it, and then it moves on to the next sentence. As you go, it tracks your speed, your accuracy and the words you got wrong.
+
+### What problem does it solve?
+
+Dictation (listening to real speech and writing it down) is a good way to train your listening and spelling in a language. Doing it by hand is slow, though: you have to pause the video, rewind, check your answer against the subtitles, and so on. Subtitles are often missing, badly timed or different from what is actually said.
+
+This app does that work for you. It makes the exercise text from **what is actually said in the audio**, splits it into sentences with exact timings, and checks your typing letter by letter.
+
+### Main goal
+
+To let you practise dictation with **any** video you like, using accurate, sentence-by-sentence exercises made from the real audio. It never relies on captions.
+
+### How it works (high level)
+
+```
+YouTube link or video file
+        │
+        ▼
+1. Get the audio         yt-dlp (YouTube) or FFmpeg (uploaded file)
+        │
+        ▼
+2. Speech to text        Whisper AI model → words with timestamps
+        │
+        ▼
+3. Clean up              remove AI mistakes, filler words; numbers → words
+        │
+        ▼
+4. Split into sentences  short lines, each with a start and end time
+        │
+        ▼
+5. Practise              the browser plays a line, you type it
 ```
 
-### GPU (optional, NVIDIA)
+The result of steps 1–4 is cached, so each video is only transcribed once.
 
-Speech recognition runs on the NVIDIA GPU when it can, and on the CPU otherwise. No system
-CUDA toolkit is needed: only the NVIDIA driver (check with `nvidia-smi`) plus the cuBLAS pip
-package in `requirements.txt`, which `ai/transcriber.py` loads from the venv. RTX 50xx
-(Blackwell) cards need CUDA 12.8+ builds; the pinned `ctranslate2` has them. The very first
-transcription on a new GPU takes about 20 s longer while CUDA compiles and caches its kernels.
+---
 
-If the GPU can't be used, the log says why and how to fix it (for example a missing
-`libcublas`), and transcription continues on the CPU. The device in use is logged with every
-transcription. To force the CPU, run with `DICTATION_DEVICE=cpu`.
+## 2. AI Technology
 
-### YouTube audio (yt-dlp)
+### The AI model
 
-YouTube requires a JavaScript challenge to be solved, so yt-dlp needs a JavaScript runtime:
-Deno is installed into the venv by `requirements.txt` (`.venv/bin/deno`, no system install).
-Without it, some videos fail with "This video is not available". Pass it explicitly:
+| Item | Value |
+| --- | --- |
+| Model | **Whisper `large-v3-turbo`** (OpenAI's open speech recognition model) |
+| Task | Speech recognition: turns spoken audio into text, with a timestamp for every word |
+| Where it runs | **Locally on your computer.** No external AI API, no API key, no account |
+| Hardware | NVIDIA GPU if available (needs about 2.3 GB of GPU memory), otherwise the CPU (same model, much slower) |
+| Download | Downloaded automatically once, on first use (about 1.6 GB), into `~/.cache/huggingface` |
+
+The model name is set in `config.py` (`WHISPER_MODEL`).
+
+### AI libraries vs. other technologies
+
+| Type | Name | Role |
+| --- | --- | --- |
+| **AI model** | Whisper `large-v3-turbo` | Recognizes the speech in the audio |
+| AI library | `faster-whisper` | Loads and runs the Whisper model in Python |
+| AI library | `ctranslate2` | The fast inference engine `faster-whisper` uses (GPU or CPU) |
+| AI library | `nvidia-cublas-cu12` | NVIDIA's CUDA math library, so the model can run on the GPU (installed inside the venv, no system CUDA needed) |
+| AI library | `onnxruntime` | Runs the optional voice-activity filter (off by default) |
+| Not AI | `num2words` | Turns numbers into words (`5` → `five`) |
+| Not AI | FFmpeg, yt-dlp | Get the audio out of videos |
+
+The rest of the processing (cleaning, sentence splitting) is ordinary, rule-based Python code, not AI.
+
+### How the AI turns audio into exercises
+
+1. **Input:** the video's audio is converted to 16 kHz mono WAV (the format Whisper expects).
+2. **Recognition** (`ai/transcriber.py`): Whisper listens to the audio and returns text segments. Every word comes with a start time, an end time and a confidence score (how sure the model is).
+3. **Hallucination filter** (`ai/transcript_processor.py`): over music or silence, Whisper sometimes "invents" text such as *"Thanks for watching"*. The app uses Whisper's own confidence values and a list of known phrases to remove these.
+4. **Cleanup:** filler words (*um*, *uh*) and sound labels (*[Music]*) are removed, and numbers become words.
+5. **Sentences:** the words are grouped into short sentences (at most 16 words / 8 seconds), using punctuation and pauses.
+6. **Clarity score:** each sentence gets the average confidence of its words. Below 0.8, the app shows an **unclear audio** badge, because the AI may have misheard it.
+7. **Output:** a list of sentences with word timings, saved as JSON in `cache/` and sent to the browser.
+
+If the GPU fails (for example a missing CUDA library), the log explains why and transcription continues on the CPU automatically.
+
+---
+
+## 3. Key Features
+
+- **Practise with any YouTube video:** paste a link and press **Load**.
+- **Practise with your own videos:** press **Upload a video…** (MP4, MOV or WebM, up to 2 GB). Videos that browsers can't play (for example HEVC or ProRes) can be converted to H.264 with one click.
+- **One sentence at a time:** each sentence plays, then waits for you. The next one starts only after you finish.
+- **Letter-by-letter checking:** letters and digits are shown as dots. Punctuation is filled in for you, and case and accents don't matter. Wrong keys flash red.
+- **Hints:** reveal the next letter (Ctrl+H). After 3 wrong tries on one letter, it is revealed automatically.
+- **Statistics:** words per minute (WPM), accuracy and a list of missed words, per video. Finishing a video shows an **End of tape** summary.
+- **Saved progress:** your position, stats and settings are saved in the browser, per video. The start page lists recent videos as cassettes that fill up as you progress.
+- **Background jobs with progress:** downloads, transcriptions and conversions show real progress and can be cancelled. The app shows whether it is running on the GPU or the CPU.
+- **Caption timing:** shift a video's sentence timing by −0.50 s to +0.50 s if lines start too early or late.
+- **Light and dark themes:** follows your system setting, with a toggle button.
+- **Delete a video:** removes its progress, cached transcripts and (for uploads) the stored file, with an 8-second **Undo**.
+
+### Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Enter | Play / pause, or replay a finished line |
+| Space | Finish the current word |
+| Backspace | Delete the last letter or space on this line |
+| Tab | Replay the current line |
+| Shift+Tab | Replay at 0.75× speed |
+| Ctrl+→ / Ctrl+← | Next / previous line |
+| Ctrl+H | Hint: reveal the next letter (press twice to reveal the whole word) |
+| Ctrl+Enter | Accept the current word as it is (when the transcript got it wrong) |
+| Ctrl+M | Mute / unmute typing sounds |
+
+Shortcuts can be changed in the `SHORTCUTS` object at the top of `static/app.js`.
+
+### How the stats are calculated
+
+- **WPM:** (characters typed / 5) per minute of typing. Time while the video is playing doesn't count, and hinted letters don't count.
+- **Accuracy:** correct keystrokes / all letter, digit and space keystrokes.
+- **Missed words:** any word where you made a mistake or used a hint.
+- Skipped sentences (for example unclear ones) never affect the stats.
+
+---
+
+## 4. Technology Stack
+
+| Technology | Purpose |
+| --- | --- |
+| **Python 3.12** | Backend language |
+| **Flask** | Web server: serves the page and the JSON API |
+| **faster-whisper + CTranslate2** | Runs the Whisper speech recognition model (see [AI Technology](#2-ai-technology)) |
+| **NVIDIA cuBLAS** (pip package) | Lets the model run on an NVIDIA GPU |
+| **onnxruntime** | Voice activity detection (optional, off by default) |
+| **num2words** | Writes numbers as words |
+| **yt-dlp** | Downloads the audio-only stream of a YouTube video |
+| **Deno + yt-dlp-ejs** (pip packages) | JavaScript runtime that yt-dlp needs to pass YouTube's checks |
+| **FFmpeg / ffprobe** (system) | Checks video files, extracts audio, converts videos |
+| **av** (PyAV) | Audio decoding used by faster-whisper |
+| **HTML, CSS, JavaScript** (no framework) | The frontend: player, typing, sounds, stats |
+| **YouTube IFrame Player API** | Plays YouTube videos in the page |
+| **Browser localStorage** | Stores your progress and stats |
+| **uv** | Creates the virtual environment and installs packages |
+| **pytest** | Tests (development only) |
+
+---
+
+## 5. Installation and Setup
+
+The instructions below are for **Linux** (Ubuntu/Debian). The GPU setup loads Linux libraries, so other systems can only use the CPU, and they haven't been tested.
+
+### Prerequisites
+
+| Requirement | Why | Check |
+| --- | --- | --- |
+| [uv](https://docs.astral.sh/uv/) | Installs Python 3.12 and the packages | `uv --version` |
+| FFmpeg (includes ffprobe) | Audio extraction and video conversion | `ffmpeg -version` |
+| Firefox or Chrome | To use the app | |
+| Internet connection | First model download, YouTube videos, web fonts | |
+| About 2 GB free disk space | The Whisper model | |
+| *Optional:* NVIDIA GPU + driver | Much faster transcription | `nvidia-smi` |
+
+You do **not** need to install Python, CUDA or Deno yourself: uv and `requirements.txt` take care of them.
+
+### Steps
+
+1. **Install FFmpeg:**
+
+   ```bash
+   sudo apt install ffmpeg
+   ```
+
+2. **Install uv** (if you don't have it):
+
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+3. **Go to the project folder and create a Python 3.12 virtual environment:**
+
+   ```bash
+   cd typing-app
+   uv venv --python 3.12 .venv
+   ```
+
+4. **Install the dependencies:**
+
+   ```bash
+   uv pip install --python .venv/bin/python -r requirements.txt
+   ```
+
+5. **Activate the environment:**
+
+   ```bash
+   source .venv/bin/activate
+   ```
+
+### Configuration
+
+No `.env` file or API key is needed. All settings are in `config.py`, with working defaults. Two can be changed with environment variables:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DICTATION_DEVICE` | `auto` | `auto` = use the NVIDIA GPU if possible, otherwise the CPU. `cpu` = always use the CPU |
+| `DICTATION_WHISPER_MODEL` | `large-v3-turbo` | The Whisper model to use. Changing it means videos are transcribed again |
+
+Example:
 
 ```bash
-.venv/bin/yt-dlp --js-runtimes deno:.venv/bin/deno -f bestaudio URL
+DICTATION_DEVICE=cpu python app.py
 ```
 
-yt-dlp breaks when YouTube changes. To update it (then update the pins in `requirements.txt`):
+### GPU notes (optional)
+
+- Only the NVIDIA driver is needed. The CUDA math library (cuBLAS) is installed inside the venv by `requirements.txt`.
+- RTX 50xx (Blackwell) cards are supported by the pinned `ctranslate2` version.
+- The very first transcription on a new GPU takes about 20 seconds longer while CUDA prepares itself.
+
+---
+
+## 6. How to Run the Project
+
+1. **Start the server** (from `typing-app/`, with the venv activated):
+
+   ```bash
+   python app.py
+   ```
+
+   This is the only service you need to run. Transcription runs in the background inside the same process.
+
+2. **Open the app:** go to **http://127.0.0.1:8000** in Firefox or Chrome.
+
+   Always use this exact address. The browser saves your progress separately for each address, so `http://localhost:8000` is redirected to it.
+
+3. **Load a video:**
+   - Paste a YouTube link and press **Load**, or
+   - Press **Upload a video…** and choose a file.
+
+   The small box next to the link is the spoken language (`en` by default; leave it empty to detect the language automatically).
+
+4. **Wait for the first transcription.** The first time you load any video, the Whisper model (about 1.6 GB) is downloaded, which can take a few minutes. After that:
+   - With a GPU, transcription is fast.
+   - On the CPU it is much slower: on a 16-thread laptop CPU it took about 0.4× the video's length (a 4-minute clip took about 1.5 minutes), and slower CPUs take longer. The app shows "Running on CPU, this will be slow".
+
+   Videos you have already transcribed load instantly from the cache.
+
+5. **Stop the server** with `Ctrl+C`.
+
+### Transcribing from the command line (optional)
+
+You can test the AI part without the web app:
+
+```bash
+python -m ai.cli some-video.mp4 --words          # print sentences and word timings
+python -m ai.cli some-video.mp4 --language auto  # detect the language
+```
+
+### Running the tests (optional)
+
+```bash
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+pytest
+```
+
+### Keeping YouTube downloads working
+
+YouTube changes often, which can break yt-dlp. If YouTube videos stop loading, update it (then update the version pins in `requirements.txt`):
 
 ```bash
 uv pip install --python .venv/bin/python -U yt-dlp yt-dlp-ejs
 ```
 
-### Transcribing a file from the command line
+### Troubleshooting
 
-```bash
-python -m ai.cli some-video.mp4 --words     # --language auto, --twice
-python -m ai.cli tests/fixtures/numbers.json  # reprocess a saved raw result, no transcription
-```
-
-The app uses one Whisper model, `large-v3-turbo` (`config.py`). It is
-downloaded once (about 1.6 GB) on first use into `~/.cache/huggingface` and needs about 2.3 GB of GPU
-memory. Without a working GPU the same model runs on the CPU, which is much slower.
-
-## Run
-
-```bash
-python app.py
-```
-
-Open **http://127.0.0.1:8000** in your browser (Firefox or Chrome), paste a YouTube link and press **Load**, or press
-**Upload a video…** to practise with a video file of your own (MP4, MOV or WebM, up to 2 GB).
-
-Always use that address. Browsers keep saved progress separately for each address, so
-http://localhost:8000 redirects to http://127.0.0.1:8000 to keep everything in one place.
-
-Run the tests with `pytest` (install the dev requirements first:
-`uv pip install --python .venv/bin/python -r requirements-dev.txt`).
-
-## Files
-
-- `app.py`: Flask server (the page, `/static/`, and the API for YouTube and uploaded videos, jobs and media)
-- `index.html`: page markup only
-- `static/style.css`: all styles (the "Booth 07" design in `new_design/DESIGN.md`; every color is a variable at the top), including the light and dark themes
-- `static/app.js`: all frontend code (player, typing, sounds, stats, saved progress)
-- `static/sounds/`: typing sounds (`key.mp3`, `error.mp3`, `hint.wav`)
-- `config.py`: settings for speech recognition, audio extraction and transcript processing, with defaults
-- `ai/transcriber.py`: faster-whisper speech recognition (GPU with CPU fallback); `ai/cli.py` runs it from the command line
-- `ai/transcript_processor.py`: hallucination filter, word cleanup, numbers to words, sentence segmentation
-- `tests/fixtures/`: real transcriber output for the test clips with the default settings, used by the tests;
-  `tests/fixtures/experiments/` holds other models and settings (the clips themselves stay in the git-ignored `tests/media/`)
-- `tests/reference/`: YouTube captions for the test clips, used only as a test reference (the app never reads captions);
-  `python tests/tools/evaluate_fixtures.py` compares every fixture against them
-- `services/audio_extractor.py`: checks media with ffprobe and extracts 16 kHz mono audio with FFmpeg
-- `services/transcript_cache.py`: builds the unified transcript for a video and caches it in two layers
-- `services/jobs.py`: runs transcriptions and conversions in the background, one at a time, with progress and cancel
-- `services/uploads.py`: stores uploaded videos (`uploads/`, named by content hash) and deletes ones not opened for 30 days
-- `services/youtube_audio.py`: downloads a YouTube video's audio-only stream with yt-dlp (never captions)
-- `tests/`: pytest tests (run `pytest`); `tests/tools/fetch_references.py` refetches the caption references
-- `docs/`: the plan for the audio-based pipeline and the progress log
-- `cache/`: `asr/` holds raw speech recognition results (rebuilt only when the model or recognition settings
-  change), `transcripts/` the processed transcripts (rebuilt from `asr/` when processing changes, without
-  transcribing again). The `<videoId>.json` files directly in `cache/` are the old caption cache; the app no
-  longer reads them.
-
-After editing `style.css` or `app.js`, bump the version in its link in `index.html`
-(`style.css?v=1` → `?v=2`, `app.js?v=1` → `?v=2`) so Chrome doesn't keep using a cached old copy.
-
-## How it works
-
-- The text always comes from the video's actual audio, never from captions: the audio is downloaded
-  (YouTube, with yt-dlp) or taken from the uploaded file, transcribed with Whisper (large-v3-turbo) on
-  the GPU, cleaned up and split into sentence-sized lines with word timings. Text Whisper writes for
-  music or silence ("Thank you.", subtitle credits, the prompt) is left out. The result is cached, so
-  a video is only transcribed once. The small box next to the link is the spoken language (`en`
-  by default; empty = detect it).
-- Each sentence gets a clarity score (how sure Whisper is of its words). Below 0.8
-  (`SENTENCE_CLARITY_MIN` in `config.py`) it shows an **unclear audio** badge: the audio may be hard to
-  hear, or Whisper may have misheard it, so the exercise may be wrong. Skip it with **Next** if you like:
-  only completed sentences count in the statistics, so skipping never affects them.
-- Each sentence plays from 0.1 s before its first word to 0.25 s after its last one
-  (`PAD_BEFORE_SECONDS` / `PAD_AFTER_SECONDS`), but never into the neighbouring sentences. If Whisper
-  stretched a sentence's first word back over music, playback starts closer to the actual words.
-- Letters and digits are hidden as dots. Type the letters and digits of each word, then press
-  **Space** to finish the word (the last word of a line needs no space). Punctuation is filled in
-  for you, so for "story, of" you type `story`, then Space, then `of`. Case and accents don't matter.
-- A wrong key (including a letter where a space belongs, or a space mid-word) flashes red in the
-  box under the sentence, which shows only the word you're typing. The box turns red and says how
-  many of the 3 tries before a hint you've used on the current letter.
-- Colors: teal for finished words, orange for the word you're typing, purple for hinted letters.
-- A line never plays on its own. The next one starts after you finish the current one.
-- Use **Caption timing** (−0.50 s to +0.50 s) if a video's lines start slightly early or late. It's saved per video.
-- The theme follows your system's light/dark setting. The moon/sun button in the corner overrides it, and the choice is remembered.
-- Finishing the last line shows an **End of tape** summary (WPM, accuracy, time typing, missed words).
-  "Back to the last line" returns to the video; "Load another tape" goes back to the start page.
-- On the start page, each video in **Pick up a tape** is a cassette: the reels wind from left to right
-  as you finish lines. "Done" means its last line is finished.
-- Progress, offset, stats and missed words are stored in the browser's localStorage, per video.
-- **Uploaded videos** are checked (type, content, size), stored in `uploads/` and transcribed from their own audio
-  in the background. The panel shows each step with real progress and whether the GPU or the CPU is used
-  ("Running on CPU, this will be slow" if the GPU can't be used); **Cancel** stops it. Uploading the same file
-  again, or opening it from Recent videos, reuses the cached transcript.
-- Some formats (HEVC/H.265, ProRes) don't play in browsers. The panel then offers **Convert**, which re-encodes the
-  video to H.264 in the background and replaces the stored file; the audio is transcribed either way.
-- An uploaded video not opened for 30 days is deleted to save space (its transcript is kept). Recent videos
-  then shows "file expired, upload it again".
-
-## The switch to audio transcription (one-time clean start)
-
-The first version made its exercises from YouTube captions. The audio-based sentences are
-different, so the old saved data can't be reused. On the first start of this version:
-
-- the server copies the old caption cache (`cache/<videoId>.json`) into
-  `backup/pre-audio-pipeline-<date-time>/cache/` (with SHA-256 checksums in `manifest.json`), checks
-  the copies, and only then removes the originals; the terminal log lists the files;
-- on your first visit, the page sends its saved progress, stats, missed words, recent videos and
-  offsets to the same backup folder (`localStorage-<date-time>.json`), also downloads a copy
-  (`dictation-old-progress-backup.json`), and only then clears them, with a one-line notice. Sound
-  and theme settings are kept.
-
-It happens once (`data_version.json` records it). Progress is now tied to each transcript's version:
-if a video's transcript is ever regenerated with different sentences, only your position in it is
-reset (with a notice); its statistics are kept.
-
-### Restoring the old data
-
-To go back to the caption-based version with your old data:
-
-1. Stop the app and put the cache files back: `cp backup/pre-audio-pipeline-*/cache/*.json cache/`
-   (or, before switching versions, `python -m services.migration --restore backup/pre-audio-pipeline-<date-time>`,
-   which also checks the checksums).
-2. Switch to the caption-based version: `git switch --detach cd42f31`, install its requirements
-   (`uv pip install --python .venv/bin/python -r requirements-dev.txt` covers them) and run `python app.py`.
-3. Open http://127.0.0.1:8000 (the caption-based version has no redirect, so use exactly this address),
-   press F12, open the Console, and paste (with your backup file's
-   contents in place of `BACKUP`):
-
-   ```js
-   const backup = BACKUP;  // the contents of localStorage-<date-time>.json or dictation-old-progress-backup.json
-   for (const [key, value] of Object.entries(backup.items)) localStorage.setItem(key, value);
-   ```
-
-   Reload the page. (In this version, the same file can also be fetched with
-   `fetch("/api/migration/browser-backup/localStorage-<date-time>.json")`.)
-
-Back on this version (`git switch main`), the clean start does not run again.
-
-## Keyboard shortcuts
-
-| Keys | Action |
+| Message | What to do |
 | --- | --- |
-| Enter | Play / pause: pauses if playing, continues a line paused partway, replays a finished line |
-| Backspace | Delete the last letter or space you entered on this line, even a correct one (see below) |
-| Tab | Replay the current line |
-| Shift+Tab | Replay at 0.75× speed |
-| Ctrl+→ | Next line |
-| Ctrl+← | Previous line |
-| Ctrl+H | Hint: reveal the next letter. Press twice in a row to reveal the rest of the word |
-| Ctrl+Enter | Accept the current word as-is (when the transcript got a word wrong) |
-| Ctrl+M | Mute / unmute typing sounds (volume slider next to the speaker button) |
+| *"YouTube audio is unavailable right now"* / *"This video is unavailable"* | Update yt-dlp (see above), or upload the video file instead |
+| *"YouTube is refusing downloads from this computer"* | YouTube is limiting your IP address. Wait a while |
+| *"The owner doesn't allow this video to be embedded"* | This video can only be played on youtube.com. Pick another one or upload the file |
+| *"Running on CPU, this will be slow"* | The GPU couldn't be used. The terminal log says why (for example a missing CUDA library) |
+| Private, age-restricted or members-only videos | These can't be downloaded. The app doesn't try to get around this |
 
-After 3 wrong keys on the same letter (or space), it's revealed automatically in purple and counts like a
-hint (change `MAX_WRONG_ATTEMPTS` in `static/app.js` to adjust).
+---
 
-Backspace steps back through the current line only: across spaces into the previous word, over
-punctuation (removed together with the letter before it), and over hinted letters, which show as
-typed if you retype them (the word stays in the missed-words list). It does nothing at the start of
-a line or once a line is finished.
+## 7. Project Structure
 
-## On-screen buttons
+```
+typing-app/
+├── app.py                  Flask server: the page, static files and the JSON API
+├── config.py               All settings (AI model, filters, sentence rules, uploads, ...)
+├── index.html              Page markup
+├── requirements.txt        Packages needed to run the app
+├── requirements-dev.txt    Extra packages for tests
+├── ai/                     Speech recognition and text processing
+│   ├── transcriber.py          Runs Whisper (GPU with CPU fallback)
+│   ├── transcript_processor.py Hallucination filter, cleanup, numbers → words, sentences
+│   ├── punctuation.py          Experimental punctuation restoring (not used by the app)
+│   └── cli.py                  Command-line transcription
+├── services/               Backend helpers
+│   ├── youtube_audio.py        Downloads YouTube audio with yt-dlp (never captions)
+│   ├── audio_extractor.py      Checks media and extracts/converts with FFmpeg
+│   ├── transcript_cache.py     Builds transcripts and caches them
+│   ├── jobs.py                 Runs long tasks in the background, one at a time
+│   ├── uploads.py              Stores uploaded videos; deletes ones unused for 30 days
+│   └── migration.py            One-time upgrade from the old caption-based version
+├── static/                 Frontend
+│   ├── app.js                  All frontend code (player, typing, stats, saved progress)
+│   ├── style.css               All styles, including light and dark themes
+│   ├── sounds/                 Typing sounds
+│   └── *.svg, *.png            Logos and icons
+├── design/                 Design spec (DESIGN.md) and mockups
+├── docs/                   Project plan and progress log
+├── tests/                  pytest tests, test fixtures and evaluation tools
+├── cache/                  Created at runtime (git-ignored)
+│   ├── asr/                    Raw Whisper results
+│   └── transcripts/            Processed sentences sent to the browser
+└── uploads/                Uploaded videos (created at runtime, git-ignored)
+```
 
-Under the video, left to right: previous line, play/pause (continues the current line), replay line,
-next line, hint (same as Ctrl+H) and fullscreen (the whole app, so the sentence stays visible).
-The bar under them fills as you finish lines, with the video time on the right.
+### Notes for developers
 
-Clicking the video also replays the line. Shortcuts are configured in the `SHORTCUTS` object
-at the top of `static/app.js`.
-
-## Deleting a video
-
-Each cassette in Pick up a tape (the recent videos) has a trash button. After you confirm, the entry disappears and an **Undo**
-notice shows for 8 seconds; only then is everything for that video deleted: its saved progress,
-statistics, missed words and timing offset, all its cached transcripts (every model/settings
-variant), and for an uploaded video the stored file. A running download, transcription or
-conversion for it is stopped first. If you close or reload the page during those 8 seconds,
-nothing is deleted. Statistics are per video only, so no other figures change. Backups in
-`backup/` are never touched.
-
-## Stats
-
-- **WPM**: (characters you typed on the line / 5) / minutes, counting from your first keystroke on
-  the line to its end, minus any time the video was playing. Each character counts once, so
-  deleting and retyping doesn't inflate it; hinted characters don't count.
-- **Accuracy**: correct keystrokes / all letter, digit and space keystrokes (Backspace isn't counted).
-- **This tape** (WPM and accuracy tiles): the average over all completed lines, weighted by length. Redoing a line replaces its stats.
-- **Missed words**: any word where you made an error or used a hint.
-
-## Troubleshooting
-
-- *"YouTube audio is unavailable right now"* or *"This video is unavailable"*: yt-dlp breaks when
-  YouTube changes. Update it (see "YouTube audio" above), or upload the video file instead.
-  Already-transcribed videos keep working from the cache.
-- *"YouTube is refusing downloads from this computer"*: YouTube throttles some IPs. Wait a while.
-- *Private, age-restricted or members-only videos* can't be downloaded; nothing tries to get around that.
-- *"The owner doesn't allow this video to be embedded"*: that video can't be played outside
-  youtube.com. Pick another one, or upload the file.
-- *"Running on CPU, this will be slow"*: the GPU couldn't be used; the log says why (for example a
-  missing CUDA library). The same model runs on the CPU, about 0.4× real time.
+- **Cache:** `cache/asr/` is only rebuilt when the model or recognition settings change (slow, it means transcribing again). `cache/transcripts/` is rebuilt from it when the processing rules change (fast). Deleting `cache/` is safe; videos are then transcribed again.
+- **After editing `static/style.css` or `static/app.js`,** increase the version number in its link in `index.html` (for example `app.js?v=9` → `?v=10`) so the browser doesn't use an old cached copy.
+- **Upgrading from the old caption-based version:** on the first start, the old data is backed up to `backup/` and cleared once (recorded in `data_version.json`). See `services/migration.py` for details and `python -m services.migration --restore <backup-folder>` to restore it.

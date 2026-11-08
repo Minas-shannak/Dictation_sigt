@@ -8,15 +8,17 @@
   // Applied before first paint so a saved theme doesn't flash.
   try { const t = localStorage.getItem("dictation:theme"); if (t) document.documentElement.dataset.theme = JSON.parse(t); } catch {}
 </script>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=5">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400..700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
 <header class="topbar">
   <div class="wrap topbarIn">
-    <span class="logo"><span class="logoDot"></span>Dictation</span>
+    <span class="logo" role="img" aria-label="Dictation"></span>
     <nav class="homeOnly" aria-label="Sections">
       <a href="#recent">Your tapes</a>
       <a href="#how">How it works</a>
@@ -25,6 +27,7 @@
     <div class="practiceOnly titleRow">
       <button id="backBtn" type="button">← Tapes</button>
       <span id="videoTitle"></span>
+      <span id="asrInfo"></span>
     </div>
     <span class="grow"></span>
     <label for="volume" class="practiceOnly volumeLabel">Volume</label>
@@ -200,17 +203,14 @@
 
     <aside id="sidebar">
       <div class="card sideCard">
-        <h2 class="capsLabel">This tape</h2>
+        <div class="cardHead">
+          <h2 class="capsLabel">This tape</h2>
+          <span id="videoStats"></span>
+        </div>
         <div class="tiles">
           <div class="tile"><span id="videoWpm" class="tileNum">–</span><span class="tileLabel">WPM</span></div>
           <div class="tile"><span id="videoAcc" class="tileNum">–</span><span class="tileLabel">Accuracy</span></div>
         </div>
-        <span id="videoStats" class="muted"></span>
-        <div class="missed">
-          <span class="muted">Missed words (<span id="missedCount">0</span>)</span>
-          <ul id="missedList"></ul>
-        </div>
-        <span id="asrInfo"></span>
       </div>
       <div class="card sideCard">
         <h2 class="capsLabel">Caption timing</h2>
@@ -250,6 +250,11 @@
         <span><kbd class="cap small">⇧Tab</kbd>slow</span>
         <span><kbd class="cap small">Ctrl H</kbd>hint</span>
         <span><kbd class="cap small">Ctrl ↵</kbd>accept word</span>
+      </div>
+
+      <div class="missed">
+        <span class="muted">Missed words<span class="srOnly"> (<span id="missedCount">0</span>)</span></span>
+        <ul id="missedList"></ul>
       </div>
     </section>
   </section>
@@ -292,6 +297,6 @@
   </section>
 </main>
 
-<script src="/static/app.js?v=8"></script>
+<script src="/static/app.js?v=9"></script>
 </body>
 </html>

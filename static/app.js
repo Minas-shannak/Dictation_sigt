@@ -992,7 +992,7 @@ function renderStats(lineEntry) {
   const avg = videoAverages(state.rec);
   $("videoWpm").textContent = avg.wpm === null ? "–" : avg.wpm;
   $("videoAcc").textContent = avg.acc === null ? "–" : `${avg.acc}%`;
-  $("videoStats").textContent = avg.lines ? `Average over ${avg.lines} line${avg.lines === 1 ? "" : "s"}` : "No finished lines yet";
+  $("videoStats").textContent = avg.lines ? `avg over ${avg.lines} line${avg.lines === 1 ? "" : "s"}` : "no lines yet";
 }
 
 // The split-flap counter is the current line; the bar fills with finished lines.

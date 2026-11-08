@@ -64,12 +64,12 @@ The three reference mockups in this folder (`home.dc.html`, `practice.dc.html`, 
 
 Google Fonts:
 ```html
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400..700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
 ```
 
 | Role | Font | Notes |
 |---|---|---|
-| Headings, logo, big stat numbers | Bricolage Grotesque 700–800 | tight letter-spacing (-0.02em to -0.035em) |
+| Headings, logo, big stat numbers | Familjen Grotesk 700 | tight letter-spacing (-0.02em to -0.035em) |
 | Body, buttons, labels | Atkinson Hyperlegible 400/700 | |
 | Anything typed, the dictation line, counters, small caps labels | JetBrains Mono 400/600 | small labels: 12–13px, uppercase, letter-spacing 0.12em |
 
@@ -77,7 +77,15 @@ The dictation line is JetBrains Mono, 30px, line-height 1.5, 18px gap between wo
 
 ## 3. Components
 
-**Logo:** a 14px orange (`--rec`) dot with a 4px `#E2CDB8` ring, then "Dictation" in Bricolage 700 22px.
+**Logo:** the "Sound to text" mark: three sound bars become two dots, then an orange cursor. Files are in `design/logo/`:
+- `logo-mark.svg` (dark ink, for light backgrounds) and `logo-mark-light.svg` (cream, for dark backgrounds).
+- In the header, inline the mark at 30×30px, then "Dictation" in Familjen Grotesk 700 22px with a 10px gap. The cursor bar uses `--rec`.
+- Favicon: copy `favicon.svg`, `favicon-32.png` and `apple-touch-icon.png` into `static/` and add to `<head>`:
+  ```html
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  ```
 
 **Pill input + button:** inputs are pill-shaped (`border-radius: 999px`), 1.5px `--line-strong` border, `--input-bg` fill, JetBrains Mono text. The primary button is an olive (`--panel`) pill with cream text, sometimes with a small orange dot before the label.
 
@@ -94,7 +102,7 @@ background-size: 13px 13px;
 
 **Line counter:** split-flap style. Each digit is a cream tile (20×28px, radius 3px, mono 600 16px) on a dark `--ink` strip. Next to it: "/ 86", a cream progress bar on `rgba(0,0,0,.35)`, and the time.
 
-**Cards:** `--card` background, 1px `--line` border, radius 18px. Inner stat tiles use `--card-inset`, a 1px `--line-soft` border and radius 10px. Big numbers are Bricolage 800 in `--ink`.
+**Cards:** `--card` background, 1px `--line` border, radius 18px. Inner stat tiles use `--card-inset`, a 1px `--line-soft` border and radius 10px. Big numbers are Familjen Grotesk 700 in `--ink`.
 
 **Missed-word chips:** pill-shaped, `--missed-bg` background, `--missed-text` color, mono 13px.
 
