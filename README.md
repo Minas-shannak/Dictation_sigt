@@ -54,8 +54,8 @@ The result of steps 1–4 is cached, so each video is only transcribed once.
 | Model | **Whisper `large-v3-turbo`** (OpenAI's open speech recognition model) |
 | Task | Speech recognition: turns spoken audio into text, with a timestamp for every word |
 | Where it runs | **Locally on your computer.** No external AI API, no API key, no account |
-| Hardware | NVIDIA GPU if available (needs about 2.3 GB of GPU memory), otherwise the CPU (same model, much slower) |
-| Download | Downloaded automatically once, on first use (about 1.6 GB), into `~/.cache/huggingface` |
+| Hardware | NVIDIA GPU if available (used about 2.3 GB of GPU memory in testing), otherwise the CPU (same model, much slower). A GPU is optional |
+| Download | Downloaded automatically once, on the first transcription (about 1.6 GB, Hugging Face repo `mobiuslabsgmbh/faster-whisper-large-v3-turbo`), into `~/.cache/huggingface/hub`. Needs internet only that first time |
 
 The model name is set in `config.py` (`WHISPER_MODEL`).
 
@@ -66,8 +66,8 @@ The model name is set in `config.py` (`WHISPER_MODEL`).
 | **AI model** | Whisper `large-v3-turbo` | Recognizes the speech in the audio |
 | AI library | `faster-whisper` | Loads and runs the Whisper model in Python |
 | AI library | `ctranslate2` | The fast inference engine `faster-whisper` uses (GPU or CPU) |
-| AI library | `nvidia-cublas-cu12` | NVIDIA's CUDA math library, so the model can run on the GPU (installed inside the venv, no system CUDA needed) |
-| AI library | `onnxruntime` | Runs the optional voice-activity filter (off by default) |
+| AI library (GPU only) | `nvidia-cublas-cu12` | NVIDIA's CUDA math library, used only when the model runs on the GPU (installed inside the venv, ~1.1 GB, no system CUDA needed) |
+| AI library | `onnxruntime` | A dependency of `faster-whisper`; runs the optional voice-activity filter (off by default) |
 | Not AI | `num2words` | Turns numbers into words (`5` → `five`) |
 | Not AI | FFmpeg, yt-dlp | Get the audio out of videos |
 
@@ -150,53 +150,102 @@ Shortcuts can be changed in the `SHORTCUTS` object at the top of `static/app.js`
 
 ## 5. Installation and Setup
 
-The instructions below are for **Linux** (Ubuntu/Debian). The GPU setup loads Linux libraries, so other systems can only use the CPU, and they haven't been tested.
+The instructions below are for **Linux** (Ubuntu/Debian, x86_64). The GPU setup loads Linux libraries, so other systems can only use the CPU, and they haven't been tested.
 
-### Prerequisites
+### Required
 
 | Requirement | Why | Check |
 | --- | --- | --- |
+| git, curl | Get the code and the uv installer (not always installed on a fresh Ubuntu) | `git --version`, `curl --version` |
+| FFmpeg (includes ffprobe) | **Needed for every video, YouTube and uploads alike:** it checks files, extracts the audio for Whisper and converts videos | `ffmpeg -version`, `ffprobe -version` |
 | [uv](https://docs.astral.sh/uv/) | Installs Python 3.12 and the packages | `uv --version` |
-| FFmpeg (includes ffprobe) | Audio extraction and video conversion | `ffmpeg -version` |
 | Firefox or Chrome | To use the app | |
-| Internet connection | First model download, YouTube videos, web fonts | |
-| About 2 GB free disk space | The Whisper model | |
-| *Optional:* NVIDIA GPU + driver | Much faster transcription | `nvidia-smi` |
+| Internet connection | First model download, YouTube videos, the YouTube player, web fonts | |
+| About 5 GB free disk space | Whisper model (~1.6 GB), virtual environment (~1.6 GB, of which ~1.1 GB is the CUDA library) and uv's package cache (another 1–2 GB) | `df -h .` |
 
-You do **not** need to install Python, CUDA or Deno yourself: uv and `requirements.txt` take care of them.
+You do **not** need to install Python, Deno, the CUDA Toolkit or cuDNN yourself: uv and `requirements.txt` take care of everything the app uses. No API key or account is needed.
+
+### Optional (faster transcription)
+
+| Requirement | Why | Check |
+| --- | --- | --- |
+| NVIDIA GPU + NVIDIA driver | Transcription on the GPU is much faster than on the CPU | `nvidia-smi` |
+
+Without a GPU, everything works on the CPU, just more slowly. See [GPU notes](#gpu-notes-optional).
 
 ### Steps
 
-1. **Install FFmpeg:**
+1. **Install the system packages:**
 
    ```bash
-   sudo apt install ffmpeg
+   sudo apt update
+   sudo apt install -y git curl ffmpeg
    ```
 
-2. **Install uv** (if you don't have it):
+2. **Install uv** (if you don't have it), then load it into the current terminal:
 
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
+   source $HOME/.local/bin/env    # or open a new terminal
+   uv --version
    ```
 
-3. **Go to the project folder and create a Python 3.12 virtual environment:**
+3. **Get the code:**
 
    ```bash
-   cd typing-app
+   git clone https://github.com/Minas-shannak/Dictation_sigt.git
+   cd Dictation_sigt
+   ```
+
+   The repository root is the app folder (it contains `app.py`). All later commands run from here.
+
+4. **Create a Python 3.12 virtual environment:**
+
+   ```bash
    uv venv --python 3.12 .venv
    ```
 
-4. **Install the dependencies:**
+   uv downloads Python 3.12 if it isn't installed. Other Python versions haven't been tested.
+
+5. **Install the dependencies:**
 
    ```bash
    uv pip install --python .venv/bin/python -r requirements.txt
    ```
 
-5. **Activate the environment:**
+6. **Activate the environment:**
 
    ```bash
    source .venv/bin/activate
    ```
+
+7. **Check the setup (optional):**
+
+   ```bash
+   ffmpeg -version | head -1
+   .venv/bin/deno --version                                  # JavaScript runtime for yt-dlp
+   python -c "import ctranslate2; print('CUDA devices:', ctranslate2.get_cuda_device_count())"
+   ```
+
+   `CUDA devices: 0` means transcription will run on the CPU.
+
+### Automatically downloaded resources
+
+| What | When | Where | How often |
+| --- | --- | --- | --- |
+| Whisper model `large-v3-turbo` (Hugging Face repo `mobiuslabsgmbh/faster-whisper-large-v3-turbo`, ~1.6 GB) | The first transcription, not at server start | `~/.cache/huggingface/hub/` (set `HF_HOME` to use another folder) | Once |
+| A YouTube video's audio | When a YouTube video is transcribed for the first time | A temporary folder, deleted afterwards | Once per video (the transcript is then cached in `cache/`) |
+| Google Fonts and the YouTube player script | Every page load | The browser's cache | Handled by the browser |
+
+The voice-activity model (Silero VAD) is included in the `faster-whisper` package and is not downloaded.
+
+To download the Whisper model in advance (for example before going offline):
+
+```bash
+python -c "from faster_whisper import download_model; download_model('large-v3-turbo')"
+```
+
+To remove it, delete `~/.cache/huggingface/hub/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo`.
 
 ### Configuration
 
@@ -215,21 +264,25 @@ DICTATION_DEVICE=cpu python app.py
 
 ### GPU notes (optional)
 
-- Only the NVIDIA driver is needed. The CUDA math library (cuBLAS) is installed inside the venv by `requirements.txt`.
-- RTX 50xx (Blackwell) cards are supported by the pinned `ctranslate2` version.
+- **Only the NVIDIA driver is needed.** The CUDA runtime is built into `ctranslate2`, and the CUDA math library (cuBLAS 12) is installed inside the venv by `requirements.txt`. You don't need the CUDA Toolkit or cuDNN, and you don't need `LD_LIBRARY_PATH`.
+- **Driver version:** tested with driver 615.71 on an RTX 5060 Laptop GPU (Blackwell). The pinned `ctranslate2` is built with CUDA 12.8, so a driver that supports CUDA 12.8 or newer (`nvidia-smi` shows "CUDA Version: 12.8" or higher) should work. Other GPUs and older drivers haven't been tested.
+- **GPU memory:** the model used about 2.3 GB of GPU memory in testing.
+- **Automatic CPU fallback:** with `DICTATION_DEVICE=auto` (the default), the app uses the CPU if no CUDA device is found. It also switches to the CPU for the rest of the session if CUDA fails while loading the model or during a transcription. The terminal log explains why it fell back.
+- **Which device is used:** after the first transcription starts, the terminal shows `Loaded Whisper model 'large-v3-turbo' on cuda (float16)` (GPU) or `on cpu (int8)` (CPU). The app also shows the device while it transcribes.
+- **Without a GPU,** `nvidia-cublas-cu12` (~1.1 GB) is still installed by `requirements.txt` but never used.
 - The very first transcription on a new GPU takes about 20 seconds longer while CUDA prepares itself.
 
 ---
 
 ## 6. How to Run the Project
 
-1. **Start the server** (from `typing-app/`, with the venv activated):
+1. **Start the server** (from the project folder, with the venv activated):
 
    ```bash
    python app.py
    ```
 
-   This is the only service you need to run. Transcription runs in the background inside the same process.
+   This is the only service you need to run. Transcription runs in the background inside the same process. The server always listens on `127.0.0.1:8000`; the port can't be changed without editing `PORT` in `app.py`.
 
 2. **Open the app:** go to **http://127.0.0.1:8000** in Firefox or Chrome.
 
@@ -280,7 +333,10 @@ uv pip install --python .venv/bin/python -U yt-dlp yt-dlp-ejs
 | *"YouTube audio is unavailable right now"* / *"This video is unavailable"* | Update yt-dlp (see above), or upload the video file instead |
 | *"YouTube is refusing downloads from this computer"* | YouTube is limiting your IP address. Wait a while |
 | *"The owner doesn't allow this video to be embedded"* | This video can only be played on youtube.com. Pick another one or upload the file |
-| *"Running on CPU, this will be slow"* | The GPU couldn't be used. The terminal log says why (for example a missing CUDA library) |
+| *"Running on CPU, this will be slow"* | The GPU couldn't be used. The terminal log says why (for example a missing CUDA library or an old driver) |
+| Every video fails with a generic error, or uploads fail, and the log shows `FileNotFoundError: ... 'ffprobe'` or `'ffmpeg'` | FFmpeg isn't installed or isn't on the `PATH`: `sudo apt install ffmpeg` |
+| `Address already in use` when starting the server | Another program is using port 8000. Stop it (`ss -ltnp \| grep :8000` shows which one) |
+| The first video seems stuck at *"Loading the AI model"* | The Whisper model (~1.6 GB) is being downloaded. This happens only once |
 | Private, age-restricted or members-only videos | These can't be downloaded. The app doesn't try to get around this |
 
 ---
@@ -288,7 +344,7 @@ uv pip install --python .venv/bin/python -U yt-dlp yt-dlp-ejs
 ## 7. Project Structure
 
 ```
-typing-app/
+Dictation_sigt/             (repository root)
 ├── app.py                  Flask server: the page, static files and the JSON API
 ├── config.py               All settings (AI model, filters, sentence rules, uploads, ...)
 ├── index.html              Page markup
@@ -324,4 +380,16 @@ typing-app/
 
 - **Cache:** `cache/asr/` is only rebuilt when the model or recognition settings change (slow, it means transcribing again). `cache/transcripts/` is rebuilt from it when the processing rules change (fast). Deleting `cache/` is safe; videos are then transcribed again.
 - **After editing `static/style.css` or `static/app.js`,** increase the version number in its link in `index.html` (for example `app.js?v=9` → `?v=10`) so the browser doesn't use an old cached copy.
-- **Upgrading from the old caption-based version:** on the first start, the old data is backed up to `backup/` and cleared once (recorded in `data_version.json`). See `services/migration.py` for details and `python -m services.migration --restore <backup-folder>` to restore it.
+- **`data_version.json` and `backup/`:** on every start, `services/migration.py` checks for data from an old caption-based version of the app. On a fresh clone there is none, so it only writes `data_version.json`. Both are git-ignored.
+
+### Restoring the old data
+
+Only relevant if you used the old caption-based version. On its first start, this version backed up that data to `backup/<folder>/` before clearing it:
+
+- **Server cache:** `python -m services.migration --restore backup/<folder>` copies the old caption files back into `cache/`.
+- **Browser data** (progress, stats, settings) is in `backup/<folder>/localStorage-*.json` as `{"items": {key: value}}`. To put it back, open the app's page, then run this in the browser's developer console (with that file's name):
+
+  ```js
+  const { items } = await (await fetch("/api/migration/browser-backup/localStorage-XXXX.json")).json();
+  for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v);
+  ```
